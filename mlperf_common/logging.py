@@ -94,10 +94,19 @@ class MLLoggerWrapper:
         self.event(key=constants.WEIGHTS_INITIALIZATION,
                    metadata=dict(tensor=tensor_name), internal_call=True)
 
-    def mlperf_submission_log(self, benchmark, num_nodes=None):
+    def mlperf_submission_log(self, benchmark, num_nodes=None, org=None,
+                              platform=None):
         """ Helper for logging submission entry. """
         if num_nodes is None:
             num_nodes = os.environ.get('SLURM_JOB_NUM_NODES', 1)
+
+        if org is None:
+            org = os.environ.get('MLPERF_SUBMISSION_ORG',
+                                 'SUBMISSION_ORG_PLACEHOLDER')
+
+        if platform is None:
+            platform = os.environ.get('MLPERF_SUBMISSION_PLATFORM',
+                                      'SUBMISSION_PLATFORM_PLACEHOLDER')
 
         self.event(
             key=constants.SUBMISSION_BENCHMARK,
@@ -106,7 +115,7 @@ class MLLoggerWrapper:
 
         self.event(
             key=constants.SUBMISSION_ORG,
-            value='NVIDIA',
+            value=org,
             internal_call=True)
 
         self.event(
@@ -121,6 +130,6 @@ class MLLoggerWrapper:
 
         self.event(
             key=constants.SUBMISSION_PLATFORM,
-            value=f'{num_nodes}xSUBMISSION_PLATFORM_PLACEHOLDER',
+            value=f'{num_nodes}x{platform}',
             internal_call=True)
 
