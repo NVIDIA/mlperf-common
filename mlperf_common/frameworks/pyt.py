@@ -36,7 +36,7 @@ class PyTProfilerHandler(ProfilerHandler):
     def profiler_start(self):
         torch.cuda.cudart().cudaProfilerStart()
 
-    def profiler_stop():
+    def profiler_stop(self):
         torch.cuda.cudart().cudaProfilerStop()
 
     def push_nvtx(self, tag):
