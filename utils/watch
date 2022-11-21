@@ -1,0 +1,182 @@
+#!/bin/bash
+# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+USAGE_STRING=$(cat <<EOF
+Usage: ${0} [options] command
+
+Options:
+  -n, --interval <secs> seconds to wait between updates
+  -t, --no-title        turn off header
+  -b, --debug           turn on debugging output
+  -c, --color           [deprecated, color is always on]
+  -p, --precise         [deprecated, interval time is always precise]
+
+ -h, --help             display this help and exit
+ -v, --version          output version information and exit
+EOF
+	     )
+
+# floating point arithmetic currently I'm doing this with "bc -l", but bc is
+# not universally available, so should switch to using something like "awk"
+# instead
+minus() {
+    bc -l <<<"((${1})-(${2}))"
+}
+
+plus() {
+    bc -l <<<"((${1})+(${2}))"
+}
+
+times() {
+    bc -l <<<"((${1})*(${2}))"
+}
+
+div() {
+    bc -l <<<"((${1})/(${2}))"
+}
+
+lt() {
+    bc -l <<<"((${1})<(${2}))"
+}
+
+min() {
+    if [[ "$(lt "${1}" "${2}")" == "1" ]]; then
+	echo "${1}"
+    else
+	echo "${2}"
+    fi
+}
+
+max() {
+    if [[ "$(lt "${1}" "${2}")" == "0" ]]; then
+	echo "${1}"
+    else
+	echo "${2}"
+    fi
+}
+
+exp_moving_avg() {
+    local alpha="${1}"
+    local prev_avg="${2}"
+    local sample="${3}"
+
+    plus "$(times "${alpha}" "${sample}")" "$(times "$(minus 1.0 "${alpha}")" "${prev_avg}")"
+}
+
+getopt --test
+[[ $? -eq 4 ]] || { echo "getopt program on this machine is too old" >&2 ; exit 4; }
+if ! temp_args=$(getopt --name "${0}" \
+                        --options hvtbcpn: \
+                        --longoptions help,version,no-title,debug,color,precise,interval: \
+                        -- "$@")
+then
+    echo "${USAGE_STRING}" >&2
+    exit 1
+fi
+
+eval set -- "${temp_args}"
+
+set -euo pipefail
+watch_interval=2.0
+title_lines=2
+debug_output=""
+while true; do
+    case "${1}" in
+	-h|--help)
+	    echo "${USAGE_STRING}"
+	    exit 0;
+	    ;;
+	-v|--version)
+	    echo "scripted watch version 1.0"
+	    exit 0;
+	    ;;
+	-n|--interval)
+	    watch_interval="$(max 0.1 "${2}")"
+	    shift 2
+	    ;;
+	-t|--no-title)
+	    title_lines=0
+	    shift;
+	    ;;
+	-d|--debug)
+	    debug_output="1"
+	    shift;
+	    ;;
+	-c|--color)
+	    # no-op, color is always on
+	    shift;
+	    ;;
+	-p|--precise)
+	    # no-op, precise is always on
+	    shift;
+	    ;;
+	--)			# end of args for this script, start of command to watch
+	    shift
+	    break;
+	    ;;
+	*)
+	    echo "internal error: unrecognized option $1" >&2
+	    exit 3
+	    ;;
+    esac
+done
+
+# For xterms we switch to the alternate screen buffer while this program is
+# running.  Following makes sure we switch back to the non-alternate buffer on
+# all possible exit conditions (except kill -9)
+cleanup_xterm() {
+    # xterm only: switch back to default screen buffer. The long name for the
+    # "rmcup" terminfo capability is "exit_ca_mode"
+    if [[ "${is_in_alternate_xterm_buffer:-}" ]]; then
+	tput rmcup
+    fi
+}
+trap cleanup_xterm EXIT
+
+# Try to switch to the xterm alternate screen buffer.  The long name for the
+# "smcup" terminfo capability is "enter_ca_mode"
+if [[ ! "${debug_output}" ]] && tput smcup
+then
+    is_in_alternate_xterm_buffer="1"
+fi
+
+
+last_time=$(date +%s.%N)
+current_time="${last_time}"
+avg_error=0.0
+current_interval="${watch_interval}"
+iteration=0
+while true; do
+    iteration=$((iteration+1))
+    # -x flag: clear screen without messing with terminal's scrollback buffer
+    [[ ! "${debug_output}" ]] && clear -x
+    if (( title_lines > 0 )); then
+	printf "%${COLUMNS}s\rEvery %.2fs: %s" "$(hostname): $(date +%a\ %e\ %b\ %Y\ %T.%N)" "$(minus "${current_time}" "${last_time}")" "${1}"
+	echo
+	echo
+    fi
+    sh -c "${1}" | tail -n"$(( LINES - title_lines - 1))"
+    sleep "${current_interval}"
+    last_time="${current_time}"
+    current_time=$(date +%s.%N)
+    avg_error=$(exp_moving_avg \
+		    "$(div 1.0 "$(min 100 "${iteration}")")" \
+		    "${avg_error}"                           \
+		    "$(minus "${current_time}"               \
+			     "$(plus "${last_time}" "${watch_interval}")")")
+    # don't let the sleep interval get negative (or zero)
+    current_interval=$(max 0.001 "$(minus "${current_interval}" \
+    			   	 	  "$(div "${avg_error}" 2)")")
+done
