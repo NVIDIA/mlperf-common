@@ -46,7 +46,6 @@ class MPICommunicationHandler(CommunicationHandler):
         mx.nd.waitall()
         
     def allreduce(self, x):
-        rank = self.global_rank()
         val = np.array(x, dtype=np.int32)
         result = np.zeros_like(val, dtype=np.int32)
         self._get_comm().Allreduce([val, self.MPI.INT], [result, self.MPI.INT])
