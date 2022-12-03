@@ -1,3 +1,19 @@
+///////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+///////////////////////////////////////////////////////////////////////////////
+
 #include <iostream>
 #include <thread>
 #include <atomic>               // for atomic_int
@@ -25,22 +41,17 @@ struct CmdLineArgs {
                                         "this message"};
     cmdline::Param<ssize_t> bufSize    {"-b", "--buffer-size",
                                         "buffer size",         16*MiB};
-    cmdline::Param<ssize_t> count      {"-c", "--count",
-                                        "number of buffers to copy in each work item",
-                                        1};
     cmdline::Param<int>     numThreads {"-n", "--num-threads",
                                         "number of threads",
                                         static_cast<int>(std::thread::hardware_concurrency())};
-    cmdline::Param<bool>    direct     {"-d", "--direct",
-                                        "Use direct file i/o", false};
     cmdline::Param<ssize_t> outSize    {"-s", "--size",
                                         "output file size", -1};
-    cmdline::Param<std::string> inFile {"-i", "--input-file",
-                                        "make output file same size as given input file",
-                                        ""};
 };
 
-std::string usageString="Usage: create-empty-file [ARGS] OUTFILE";
+std::string usageString=
+    "Usage: create-empty-file --size N [ARGS] OUTFILE\n"
+    "typically you would calculate size with something like `$(stat --format=%s FILENAME)'"
+    ;
 typedef std::atomic<int> pile_type;
 
 off_t
@@ -67,19 +78,15 @@ worker(pile_type* pile,
        int threadId,
        void* outBuf,
        ssize_t bufferSize,
-       ssize_t count,
        off_t fileSize)
 {
-    off_t chunkSize = bufferSize*count;
-    off_t maxChunks = ceilDiv(fileSize, chunkSize);
+    off_t maxChunks = ceilDiv(fileSize, bufferSize);
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
-        for (int j = 0; j < count; ++j) {
-            off_t myOffset = (i*chunkSize) + (j*bufferSize);
-            if (myOffset >= fileSize) break;
-            assert((fileSize-myOffset) > 0);
-            off_t mySize = std::min(bufferSize, fileSize-myOffset);
-            memset(static_cast<char*>(outBuf)+myOffset, 'f', mySize);
-        }
+        off_t myOffset = i*bufferSize;
+        if (myOffset >= fileSize) break;
+        assert((fileSize-myOffset) > 0);
+        off_t mySize = std::min(bufferSize, fileSize-myOffset);
+        memset(static_cast<char*>(outBuf)+myOffset, 'f', mySize);
     }
 }
 
@@ -106,30 +113,12 @@ main(int argc,
     const std::string outFileName{argv[argc-1]};
         
     off_t outSize = args.outSize;
-    const std::string inFileName{args.inFile};
-    if (inFileName != "") {
-        if (outSize <= 0) {
-            outSize = getFileSize(inFileName);
-        }
-        else {
-            // ambiguous to specify both: error
-            outSize = -1;
-        }
-    }
-    
     if (outSize <= 0) {
         std::cerr
-            << "Error: must provide exactly one of --size or --input-file to choose output file size"
+            << "Error: must provide --size argument"
             << std::endl;
         std::cerr << usageString << std::endl;
         std::cerr << cmdline::helpMsg() << std::endl;
-        exit(1);
-    }
-
-    if (args.direct) {
-        std::cerr
-            << "Sorry: --direct flag not currently supported!"
-            << std::endl;
         exit(1);
     }
 
@@ -137,7 +126,6 @@ main(int argc,
     std::cout << "output size is " << outSize << std::endl;
     std::cout << "the buffer size is " << args.bufSize << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
-    std::cout << "writing in chunks of " << args.count << " buffers" << std::endl;
 
     int outFD = open(outFileName.c_str(),
                      O_CREAT|O_RDWR,
@@ -167,7 +155,6 @@ main(int argc,
                                       i,
                                       outBuf,
                                       args.bufSize,
-                                      args.count,
                                       outSize));
     }
     // wait for everyone to finish

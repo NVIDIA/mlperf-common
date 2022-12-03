@@ -1,4 +1,4 @@
-#!/bin/bash
+###############################################################################
 # Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,5 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+###############################################################################
 
-sudo /sbin/sysctl vm.drop_caches=3
+alloc-empty-file-buffer: alloc-empty-file-buffer.cpp cmdline.cpp cmdline.h
+	g++ -O3 -Wall -s -o $@ $^ -lpthread
