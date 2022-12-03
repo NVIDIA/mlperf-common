@@ -47,16 +47,19 @@ struct CmdLineArgs {
 };
 
 std::string usageString=
-    "Usage: cp-into [ARGS] INFILE OUTFILE"
+    "Usage: cp-into [ARGS] INFILE OUTFILE\n"
+    "intention is that OUTFILE already exists, is fully cached, and is same size as INFILE\n"
+    "as would be the case if OUTFILE had been created with\n"
+    "\talloc-empty-file-buffer --size $(stat --format=%s INFILE) OUTFILE\n"
     ;
 typedef std::atomic<int> pile_type;
 
 off_t
-getFileSize(const std::string& filePath)
+getFileSize(int fD)
 {
     struct stat statbuf;
 
-    if (stat(filePath.c_str(), &statbuf) != 0) {
+    if (fstat(fD, &statbuf) != 0) {
         perror("error calling stat on input file");
         return -1;
     }
@@ -100,39 +103,48 @@ main(int argc,
         exit(0);
     }
 
-    if ((argc - argsProcessed) != 1) {
-        std::cerr << "Error: must provide exactly one output file" << std::endl;
+    if ((argc - argsProcessed) != 2) {
+        std::cerr << "Error: must provide exactly one input file and one output file" << std::endl;
         std::cerr << usageString << std::endl;
         std::cerr << cmdline::helpMsg() << std::endl;
         exit(1);
     }
 
+    const std::string inFileName{argv[argc-2]};
     const std::string outFileName{argv[argc-1]};
         
-    off_t outSize = args.outSize;
-    if (outSize <= 0) {
+    int inFD = open(inFileName.c_str(), O_RDONLY|O_DIRECT);
+    if (inFD < 0) {
+        perror("opening input direct failed, retrying indirect");
+        inFD = open(inFileName.c_str(), O_RDONLY);
+        if (inFD < 0) {
+            perror("opening input file failed");
+            exit(1);
+        }
+    }
+    off_t inSize = getFileSize(inFD);
+    if (inSize < 0) {
         std::cerr
-            << "Error: must provide --size argument"
+            << "Error: could not find valid file size for input file "
+            << inFileName
             << std::endl;
         std::cerr << usageString << std::endl;
         std::cerr << cmdline::helpMsg() << std::endl;
         exit(1);
     }
 
+    std::cout << "infile name is " << inFileName << std::endl;
     std::cout << "outfile name is " << outFileName << std::endl;
-    std::cout << "output size is " << outSize << std::endl;
+    std::cout << "input size is " << inSize << std::endl;
     std::cout << "the buffer size is " << args.bufSize << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
+
 
     int outFD = open(outFileName.c_str(),
                      O_CREAT|O_RDWR,
                      S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
     if (outFD < 0) {
         perror("opening outfile failed");
-        return (1);
-    }
-    if (ftruncate(outFD, outSize) != 0) {
-        perror("ftruncate of output file failed");
         return (1);
     }
 
@@ -162,6 +174,11 @@ main(int argc,
         else {
             std::cerr << "unjoinable thread???" << std::endl;
         }
+    }
+
+    if (ftruncate(outFD, outSize) != 0) {
+        perror("ftruncate of output file failed");
+        return (1);
     }
 
     if (close(outFD) != 0) {

@@ -65,13 +65,12 @@ worker(pile_type* pile,
        int threadId,
        void* outBuf,
        ssize_t bufferSize,
+       off_t maxChunks,
        off_t fileSize)
 {
-    off_t maxChunks = ceilDiv(fileSize, bufferSize);
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
         off_t myOffset = i*bufferSize;
-        if (myOffset >= fileSize) break;
-        assert((fileSize-myOffset) > 0);
+        assert(myOffset < fileSize);
         off_t mySize = std::min(bufferSize, fileSize-myOffset);
         memset(static_cast<char*>(outBuf)+myOffset, 'f', mySize);
     }
@@ -109,9 +108,11 @@ main(int argc,
         exit(1);
     }
 
+    off_t maxChunks = ceilDiv(outSize, args.bufSize);
     std::cout << "outfile name is " << outFileName << std::endl;
     std::cout << "output size is " << outSize << std::endl;
     std::cout << "the buffer size is " << args.bufSize << std::endl;
+    std::cout << "max chunks is " << maxChunks << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
 
     int outFD = open(outFileName.c_str(),
@@ -144,6 +145,7 @@ main(int argc,
                                       i,
                                       outBuf,
                                       args.bufSize,
+                                      maxChunks,
                                       outSize));
     }
     // wait for everyone to finish

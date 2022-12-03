@@ -14,5 +14,23 @@
 # limitations under the License.
 ###############################################################################
 
-alloc-empty-file-buffer: alloc-empty-file-buffer.cpp cmdline.cpp cmdline.h
-	g++ -O3 -Wall -s -o $@ $^ -lpthread
+PROGRAMS = alloc-empty-file-buffer cp-into
+
+alloc_empty_OBJS = alloc-empty-file-buffer.o cmdline.o
+cp_into_OBJS     = cp-into.o cmdline.o
+
+LDFLAGS  = -s
+CXXFLAGS = -O3 -Wall
+LDLIBS   = -lpthread
+
+.PHONY: all
+all: $(PROGRAMS)
+
+alloc-empty-file-buffer: $(alloc_empty_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+cp-into: $(cp_into_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+clean:
+	$(RM) $(PROGRAMS) $(alloc_empty_OBJS) $(cp_into_OBJS)
