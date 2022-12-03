@@ -55,19 +55,6 @@ std::string usageString=
 typedef std::atomic<int> pile_type;
 
 off_t
-getFileSize(const std::string& filePath)
-{
-    struct stat statbuf;
-
-    if (stat(filePath.c_str(), &statbuf) != 0) {
-        perror("error calling stat on input file");
-        return -1;
-    }
-
-    return statbuf.st_size;
-}
-
-off_t
 ceilDiv(off_t dividend, off_t divisor)
 {
     return (dividend+(divisor-1))/divisor;
