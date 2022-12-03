@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo /sbin/sysctl vm.drop_caches=3
