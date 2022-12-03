@@ -139,6 +139,8 @@ main(int argc,
         return (1);
     }
 
+    // we specifically do NOT use MAP_POPULATE here because it seems to lead to
+    // buffers that are slower to random access later
     void* outBuf = mmap(NULL, outSize, PROT_READ|PROT_WRITE, MAP_SHARED,
                         outFD, 0);
     if (outBuf == MAP_FAILED) {
