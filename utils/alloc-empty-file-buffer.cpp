@@ -49,7 +49,7 @@ struct CmdLineArgs {
 };
 
 std::string usageString=
-    "Usage: create-empty-file --size N [ARGS] OUTFILE\n"
+    "Usage: alloc-empty-file-buffer --size N [ARGS] OUTFILE\n"
     "typically you would calculate size with something like `$(stat --format=%s FILENAME)'"
     ;
 typedef std::atomic<int> pile_type;
