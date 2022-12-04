@@ -148,7 +148,7 @@ main(int argc,
         return (1);
     }
 
-    void* outBuf = mmap(NULL, outSize, PROT_READ|PROT_WRITE, MAP_SHARED,
+    void* outBuf = mmap(NULL, inSize, PROT_READ|PROT_WRITE, MAP_SHARED,
                         outFD, 0);
     if (outBuf == MAP_FAILED) {
         perror("mmap to allocate memory for cache failed");
@@ -164,7 +164,7 @@ main(int argc,
                                       i,
                                       outBuf,
                                       args.bufSize,
-                                      outSize));
+                                      inSize));
     }
     // wait for everyone to finish
     for (std::thread &t: workers) {
@@ -176,7 +176,7 @@ main(int argc,
         }
     }
 
-    if (ftruncate(outFD, outSize) != 0) {
+    if (ftruncate(outFD, inSize) != 0) {
         perror("ftruncate of output file failed");
         return (1);
     }
