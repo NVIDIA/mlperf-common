@@ -26,7 +26,6 @@
 #include <fcntl.h>
 #include <unistd.h>             // for stat, pread, pwrite, lseek, close
 #include <stdio.h>              // for perror
-#include <string.h>             // for memset
 
 #include "cmdline.h"
 
@@ -76,17 +75,43 @@ ceilDiv(off_t dividend, off_t divisor)
 void
 worker(pile_type* pile,
        int threadId,
+       int inFD,
        void* outBuf,
        ssize_t bufferSize,
+       off_t maxChunks,
        off_t fileSize)
 {
-    off_t maxChunks = ceilDiv(fileSize, bufferSize);
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
         off_t myOffset = i*bufferSize;
-        if (myOffset >= fileSize) break;
-        assert((fileSize-myOffset) > 0);
+        assert(myOffset < fileSize);
         off_t mySize = std::min(bufferSize, fileSize-myOffset);
-        memset(static_cast<char*>(outBuf)+myOffset, 'f', mySize);
+        if (mySize < bufferSize) {
+            // last iteration (last buffer of input file)
+            // needs to be treated specially for direct reads
+        } else {
+            off_t readResult;
+            do {
+                readResult = pread(inFD, outBuf, bufferSize, myOffset);
+                if (readResult < bufferSize) {
+                    if (readResult < 0) {
+                        perror("failure during read");
+                        exit(1);
+                    }
+                    if (readResult == 0) {
+                        std:: cerr << "thread " << threadId
+                                   << " got unexpected end-of-file while reading offset "
+                                   << myOffset
+                                   << std::endl;
+                        break;
+                    }
+                    std::cerr << "thread " << threadId
+                              << " got partial read of size " << readResult
+                              << " when trying to read offset " << myOffset
+                              << ": retrying"
+                              << std::endl;
+                }
+            } while (readResult < bufferSize);
+        }
     }
 }
 
@@ -122,8 +147,8 @@ main(int argc,
             exit(1);
         }
     }
-    off_t inSize = getFileSize(inFD);
-    if (inSize < 0) {
+    off_t fileSize = getFileSize(inFD);
+    if (fileSize < 0) {
         std::cerr
             << "Error: could not find valid file size for input file "
             << inFileName
@@ -133,12 +158,13 @@ main(int argc,
         exit(1);
     }
 
+    off_t maxChunks = ceilDiv(fileSize, args.bufSize);
     std::cout << "infile name is " << inFileName << std::endl;
     std::cout << "outfile name is " << outFileName << std::endl;
-    std::cout << "input size is " << inSize << std::endl;
+    std::cout << "file size is " << fileSize << std::endl;
     std::cout << "the buffer size is " << args.bufSize << std::endl;
+    std::cout << "max chunks is " << maxChunks << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
-
 
     int outFD = open(outFileName.c_str(),
                      O_CREAT|O_RDWR,
@@ -148,7 +174,7 @@ main(int argc,
         return (1);
     }
 
-    void* outBuf = mmap(NULL, inSize, PROT_READ|PROT_WRITE, MAP_SHARED,
+    void* outBuf = mmap(NULL, fileSize, PROT_READ|PROT_WRITE, MAP_SHARED,
                         outFD, 0);
     if (outBuf == MAP_FAILED) {
         perror("mmap to allocate memory for cache failed");
@@ -161,10 +187,12 @@ main(int argc,
     for (int i = 0; i < args.numThreads; i++) {
         workers.push_back(std::thread(worker,
                                       &the_pile,
+                                      inFD,
                                       i,
                                       outBuf,
                                       args.bufSize,
-                                      inSize));
+                                      maxChunks,
+                                      fileSize));
     }
     // wait for everyone to finish
     for (std::thread &t: workers) {
@@ -172,11 +200,15 @@ main(int argc,
             t.join();
         }
         else {
-            std::cerr << "unjoinable thread???" << std::endl;
+            std::cerr << "internal error: unjoinable thread???" << std::endl;
         }
     }
 
-    if (ftruncate(outFD, inSize) != 0) {
+    if (close(inFD) != 0) {
+        perror("close of input file failed");
+        // don't exit, keep trying to finish cleanup
+    }
+    if (ftruncate(outFD, fileSize) != 0) {
         perror("ftruncate of output file failed");
         return (1);
     }

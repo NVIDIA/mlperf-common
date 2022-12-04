@@ -26,6 +26,8 @@ LDLIBS   = -lpthread
 .PHONY: all
 all: $(PROGRAMS)
 
+$(alloc_empty_OBJS) $(cp_into_OBJS): cmdline.h
+
 alloc-empty-file-buffer: $(alloc_empty_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 

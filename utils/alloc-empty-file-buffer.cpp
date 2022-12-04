@@ -44,7 +44,7 @@ struct CmdLineArgs {
     cmdline::Param<int>     numThreads {"-n", "--num-threads",
                                         "number of threads",
                                         static_cast<int>(std::thread::hardware_concurrency())};
-    cmdline::Param<ssize_t> outSize    {"-s", "--size",
+    cmdline::Param<ssize_t> fileSize    {"-s", "--size",
                                         "output file size", -1};
 };
 
@@ -98,8 +98,8 @@ main(int argc,
 
     const std::string outFileName{argv[argc-1]};
         
-    off_t outSize = args.outSize;
-    if (outSize <= 0) {
+    off_t fileSize = args.fileSize;
+    if (fileSize <= 0) {
         std::cerr
             << "Error: must provide --size argument"
             << std::endl;
@@ -108,9 +108,9 @@ main(int argc,
         exit(1);
     }
 
-    off_t maxChunks = ceilDiv(outSize, args.bufSize);
+    off_t maxChunks = ceilDiv(fileSize, args.bufSize);
     std::cout << "outfile name is " << outFileName << std::endl;
-    std::cout << "output size is " << outSize << std::endl;
+    std::cout << "file size is " << fileSize << std::endl;
     std::cout << "the buffer size is " << args.bufSize << std::endl;
     std::cout << "max chunks is " << maxChunks << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
@@ -122,14 +122,14 @@ main(int argc,
         perror("opening outfile failed");
         return (1);
     }
-    if (ftruncate(outFD, outSize) != 0) {
+    if (ftruncate(outFD, fileSize) != 0) {
         perror("ftruncate of output file failed");
         return (1);
     }
 
     // we specifically do NOT use MAP_POPULATE here because it seems to lead to
     // buffers that are slower to random access later
-    void* outBuf = mmap(NULL, outSize, PROT_READ|PROT_WRITE, MAP_SHARED,
+    void* outBuf = mmap(NULL, fileSize, PROT_READ|PROT_WRITE, MAP_SHARED,
                         outFD, 0);
     if (outBuf == MAP_FAILED) {
         perror("mmap to allocate memory for cache failed");
@@ -146,7 +146,7 @@ main(int argc,
                                       outBuf,
                                       args.bufSize,
                                       maxChunks,
-                                      outSize));
+                                      fileSize));
     }
     // wait for everyone to finish
     for (std::thread &t: workers) {
