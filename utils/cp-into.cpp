@@ -72,11 +72,21 @@ ceilDiv(off_t dividend, off_t divisor)
     return (dividend+(divisor-1))/divisor;
 }
 
+#if 0
+off_t noisyPRead(int threadId,
+                 int fD,
+                 char* buffer, // start address in buffer
+                 off_t count,  // size of write
+                 off_t offset) // offset in input file
+{
+}
+#endif
+
 void
 worker(pile_type* pile,
        int threadId,
        int inFD,
-       void* outBuf,
+       char* outBuf,
        ssize_t bufferSize,
        off_t maxChunks,
        off_t fileSize)
@@ -86,16 +96,75 @@ worker(pile_type* pile,
         assert(myOffset < fileSize);
         off_t mySize = std::min(bufferSize, fileSize-myOffset);
         if (mySize < bufferSize) {
-            // last iteration (last buffer of input file)
-            // needs to be treated specially for direct reads
+            off_t readResult;
+            do {
+                readResult = pread(inFD,
+                                   outBuf+myOffset,
+                                   bufferSize,
+                                   myOffset);
+                if (readResult < mySize) {
+                    if (readResult < 0) {
+                        perror("failure during final read");
+                        if (errno == EINTR) {
+                            // according to man 7 signal, on Linux EINTR should
+                            // never happen for a _local_ disk, but it might
+                            // happen on other OSes for local disk, and might
+                            // well happen for a disk that is non-local (e.g.,
+                            // NFS or maybe even Lustre).
+                            std::cerr << "thread " << threadId
+                                      << " retrying interrupted read"
+                                      << std::endl;
+                            continue;
+                        }
+                        std::cerr << "thread " << threadId
+                                  << " got unexpected error while reading offset "
+                                  << myOffset
+                                  << std::endl;
+                        break;
+                    }
+                    if (readResult == 0) {
+                        std:: cerr << "thread " << threadId
+                                   << " got unexpected end-of-file while reading offset "
+                                   << myOffset
+                                   << std::endl;
+                        break;
+                    }
+                    std::cerr << "thread " << threadId
+                              << " got partial read of size " << readResult
+                              << " when trying to read offset " << myOffset
+                              << ": retrying"
+                              << std::endl;
+                }
+            } while (readResult < mySize);
         } else {
             off_t readResult;
             do {
-                readResult = pread(inFD, outBuf, bufferSize, myOffset);
+                readResult = pread(inFD,
+                                   outBuf+myOffset,
+                                   bufferSize,
+                                   myOffset);
+
+                // retry partial/interrupted reads, and noisily fail on any
+                // other unexpected condition
                 if (readResult < bufferSize) {
                     if (readResult < 0) {
                         perror("failure during read");
-                        exit(1);
+                        if (errno == EINTR) {
+                            // according to man 7 signal, on Linux EINTR should
+                            // never happen for a _local_ disk, but it might
+                            // happen on other OSes for local disk, and might
+                            // well happen for a disk that is non-local (e.g.,
+                            // NFS or maybe even Lustre).
+                            std::cerr << "thread " << threadId
+                                      << " retrying interrupted read"
+                                      << std::endl;
+                            continue;
+                        }
+                        std::cerr << "thread " << threadId
+                                  << " got unexpected error while reading offset "
+                                  << myOffset
+                                  << std::endl;
+                        break;
                     }
                     if (readResult == 0) {
                         std:: cerr << "thread " << threadId
@@ -130,6 +199,15 @@ main(int argc,
 
     if ((argc - argsProcessed) != 2) {
         std::cerr << "Error: must provide exactly one input file and one output file" << std::endl;
+        std::cerr << usageString << std::endl;
+        std::cerr << cmdline::helpMsg() << std::endl;
+        exit(1);
+    }
+
+    if ((args.bufSize % 2*MiB) != 0) {
+        std::cerr << "Error: --buf-size must be a multiple of 2MiB ("
+                  << 2*MiB << ")"
+                  <<std::endl;
         std::cerr << usageString << std::endl;
         std::cerr << cmdline::helpMsg() << std::endl;
         exit(1);
@@ -187,9 +265,9 @@ main(int argc,
     for (int i = 0; i < args.numThreads; i++) {
         workers.push_back(std::thread(worker,
                                       &the_pile,
-                                      inFD,
                                       i,
-                                      outBuf,
+                                      inFD,
+                                      static_cast<char*>(outBuf),
                                       args.bufSize,
                                       maxChunks,
                                       fileSize));
