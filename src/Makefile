@@ -14,6 +14,10 @@
 # limitations under the License.
 ###############################################################################
 
+prefix      ?= /usr/local
+exec_prefix ?= $(prefix)
+bindir      ?= $(exec_prefix)/bin
+
 PROGRAMS = alloc-empty-file-buffer cp-into
 
 alloc_empty_OBJS = alloc-empty-file-buffer.o cmdline.o
@@ -25,6 +29,12 @@ LDLIBS   = -lpthread
 
 .PHONY: all
 all: $(PROGRAMS)
+
+installdirs:
+	mkdir --parents $(bindir)
+
+install: all installdirs
+	install -t $(bindir) $(PROGRAMS)
 
 $(alloc_empty_OBJS) $(cp_into_OBJS): cmdline.h
 
