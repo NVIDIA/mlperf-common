@@ -30,7 +30,7 @@ setup(
     long_description_content_type="text/markdown",
     name="mlperf-common",
     packages=find_packages(where="."),
-    scripts=['client/bindpcie'],
+    scripts=['client/bindpcie', 'client/fastmd5', 'client/dropcache'],
     url="https://github.com/NVIDIA/mlperf-common",
     version="0.1",
 )
