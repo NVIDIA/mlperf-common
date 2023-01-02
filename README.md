@@ -3,13 +3,10 @@
 
 ## MLPerf Logging
 
-Clone the repo in the Dockerfile:
+MLPerf common can be installed via `pip install` by adding the following line to the `requirements.txt` file:
 ```
-RUN git clone --depth=1 --branch=main https://github.com/NVIDIA/mlperf-common mlperf-common-repo \
-  && cp mlperf-common-repo/client/bindpcie . \
-  && cp -r mlperf-common-repo/mlperf_common . \
-  && rm -rf mlperf-common-repo
- ```
+git+https://github.com/NVIDIA/mlperf-common.git
+```
 
 ### Integration using torch.distributed (pytorch)
 
@@ -39,6 +36,13 @@ comm = MPI.COMM_WORLD
 mllogger = MLLoggerWrapper(MPICommunicationHandler(comm), value=None)
 ```
 by default, `MPICommunicationHandler()` creates a global communicator
+
+### Logging additional metrics
+MLPerf logger can be used to track additional non-required metric, for example `throughput`. The recommended way is to add a line such as:
+```
+mllogger.event(key='tracked_stats', metadata={'step': epoch}, value={"throughput": throughput, "metric_a": metric_a, 'metric_b': metric_b})
+```
+where `throughput` is recommended to be `samples per second`, logged every epoch or as often as it is reasonable for a given benchmark. Additional metrics, `metric_a` and `metric_b`, can represent any numerical value that requires logging. The key `tracked_stats` and an increasing value for `step` are required.
 
 ## Scaleout Bridge
 
