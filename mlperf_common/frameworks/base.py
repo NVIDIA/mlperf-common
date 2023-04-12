@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,3 +35,26 @@ class ProfilerHandler:
     def pop_nvtx(self):
         raise NotImplementedError
 
+class BaseMPICommunicationHandler(CommunicationHandler):
+    def __init__(self, comm=None, **kwargs):
+        super().__init__(**kwargs)
+        self.comm = comm
+
+    def _get_comm(self):
+        if self.comm is None:
+            from mpi4py import MPI
+            self.comm = MPI.COMM_WORLD
+
+        return self.comm
+
+    def barrier(self, sync_group=None):
+        c = self._get_comm() if sync_group is None else sync_group
+        # NOTE: MPI_Barrier is *not* working reliably at scale. Using MPI_Allreduce instead.
+        #c.Barrier()
+        val = np.ones(1, dtype=np.int32)
+        result = np.zeros(1, dtype=np.int32)
+        c.Allreduce(val, result)
+
+    def global_rank(self):
+        c = self._get_comm()
+        return c.Get_rank()
