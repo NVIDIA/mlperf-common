@@ -19,7 +19,7 @@ mllogger = MLLoggerWrapper(PyTCommunicationHandler(), value=None)
 ```
 Then use `mllogger` by importing `from mlperf_logger import mllogger` in other modules.
 
-### Integration using MPI (horovod/mxnet/tensorflow)
+### Integration using MPI (horovod/hugectr/mxnet/tensorflow)
 
 In `mlperf_logger.py` global module define:
 ```
@@ -30,12 +30,12 @@ mllogger = MLLoggerWrapper(MPICommunicationHandler(), value=None)
 ```
 Then use `mllogger` by importing `from mlperf_logger import mllogger` in other modules.
 
-Optionally, you can pass an MPI communicator during the initialization of `MPICommunicationHandler()`
+Optionally, you can pass an MPI communicator during the initialization of `MPICommunicationHandler()`.
 ```
 comm = MPI.COMM_WORLD
 mllogger = MLLoggerWrapper(MPICommunicationHandler(comm), value=None)
 ```
-by default, `MPICommunicationHandler()` creates a global communicator
+by default, `MPICommunicationHandler()` creates a global communicator.
 
 ### Logging additional metrics
 MLPerf logger can be used to track additional non-required metric, for example `throughput`. The recommended way is to add a line such as:
