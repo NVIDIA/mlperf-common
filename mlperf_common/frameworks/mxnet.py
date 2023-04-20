@@ -14,7 +14,6 @@
 
 import mxnet as mx
 from mxnet import cuda_utils as cu
-import numpy as np
 
 from mlperf_common.frameworks.base import BaseMPICommunicationHandler, ProfilerHandler
 
