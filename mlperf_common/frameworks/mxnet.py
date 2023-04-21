@@ -15,7 +15,8 @@
 import mxnet as mx
 from mxnet import cuda_utils as cu
 
-from mlperf_common.frameworks.base import BaseMPICommunicationHandler, ProfilerHandler
+from mlperf_common.frameworks.base import ProfilerHandler
+from mlperf_common.frameworks.base_mpi import BaseMPICommunicationHandler
 
 class MPICommunicationHandler(BaseMPICommunicationHandler):
     def device_sync(self):

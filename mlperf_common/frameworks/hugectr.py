@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from mlperf_common.frameworks.base import BaseMPICommunicationHandler, ProfilerHandler
+from mlperf_common.frameworks.base_mpi import BaseMPICommunicationHandler
 
 class HCTRCommunicationHandler(BaseMPICommunicationHandler):
     pass
