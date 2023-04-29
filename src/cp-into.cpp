@@ -26,6 +26,8 @@
 #include <fcntl.h>
 #include <unistd.h>             // for stat, pread, pwrite, lseek, close
 #include <stdio.h>              // for perror
+#include <sys/statvfs.h>        // for statvfs (to get fs blocksize for direct
+                                // reads)
 
 #include "cmdline.h"
 
@@ -67,6 +69,19 @@ getFileSize(int fD)
 }
 
 off_t
+getFileSystemBlockSize(int fD)
+{
+    struct statvfs statvfsbuf;
+
+    if (fstatvfs(fD, &statvfsbuf) != 0) {
+        perror("error calling statvfs to get block size of input file");
+        return -1;
+    }
+
+    return statvfsbuf.f_bsize;
+}
+
+off_t
 ceilDiv(off_t dividend, off_t divisor)
 {
     return (dividend+(divisor-1))/divisor;
@@ -79,17 +94,40 @@ worker(pile_type* pile,
        char* outBuf,
        ssize_t bufferSize,
        off_t maxChunks,
-       off_t fileSize)
+       off_t fileSize,
+       off_t inputFSBlockSize)
 {
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
         off_t myOffset = i*bufferSize;
         assert (myOffset < fileSize);
         off_t mySize = std::min(bufferSize, fileSize-myOffset);
+
         assert (mySize > 0);
+        // O_DIRECT read size for last block needs to be very very specific: it
+        // needs to be an exact multiple of the filesystem block size on which
+        // the file resides, but it can't be more than a single block larger!
+        off_t myReadSize = ceilDiv(mySize, inputFSBlockSize) * inputFSBlockSize;
+        if (mySize != bufferSize) {
+            std::cerr << "thread " << threadId
+                      << " is about to read the last (partial) block of the input file"
+                      << std::endl
+                      << "filesize is "
+                      << fileSize
+                      << std::endl
+                      << "myOffset is "
+                      << myOffset
+                      << std::endl
+                      << "mySize is "
+                      << mySize
+                      << std::endl
+                      << "read size is "
+                      << myReadSize
+                      << std::endl;
+        }
         do {
             off_t readResult = pread(inFD,
                                      outBuf+myOffset, // buffer offset
-                                     bufferSize,      // size of read
+                                     myReadSize,      // size of read
                                      myOffset);       // file offset
 
             if (readResult == mySize) {
@@ -100,7 +138,7 @@ worker(pile_type* pile,
             // noisy failure cases
             assert (readResult < mySize);
             if (readResult == 0) {
-                std:: cerr << "thread " << threadId
+                std::cerr << "thread " << threadId
                            << " got unexpected end-of-file while reading offset "
                            << myOffset
                            << std::endl;
@@ -111,6 +149,9 @@ worker(pile_type* pile,
                 std::cerr << "thread " << threadId
                           << " got unexpected error while reading offset "
                           << myOffset
+                          << std::endl
+                          << "read result is "
+                          << readResult
                           << std::endl;
                 break;
             }
@@ -167,6 +208,7 @@ main(int argc,
         }
     }
     off_t fileSize = getFileSize(inFD);
+    off_t fsBlockSize = getFileSystemBlockSize(inFD);
     if (fileSize < 0) {
         std::cerr
             << "Error: could not find valid file size for input file "
@@ -181,7 +223,8 @@ main(int argc,
     std::cout << "infile name is " << inFileName << std::endl;
     std::cout << "outfile name is " << outFileName << std::endl;
     std::cout << "file size is " << fileSize << std::endl;
-    std::cout << "the buffer size is " << args.bufSize << std::endl;
+    std::cout << "the read size is " << args.bufSize << std::endl;
+    std::cout << "the input fs block size is " << fsBlockSize << std::endl;
     std::cout << "max chunks is " << maxChunks << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
 
@@ -193,7 +236,9 @@ main(int argc,
         return (1);
     }
 
-    void* outBuf = mmap(NULL, fileSize, PROT_READ|PROT_WRITE, MAP_SHARED,
+    off_t maxInFileBlocks = ceilDiv(fileSize, fsBlockSize);
+
+    void* outBuf = mmap(NULL, maxInFileBlocks * fsBlockSize, PROT_READ|PROT_WRITE, MAP_SHARED,
                         outFD, 0);
     if (outBuf == MAP_FAILED) {
         perror("mmap to allocate memory for cache failed");
@@ -211,7 +256,8 @@ main(int argc,
                                       static_cast<char*>(outBuf),
                                       args.bufSize,
                                       maxChunks,
-                                      fileSize));
+                                      fileSize,
+                                      fsBlockSize));
     }
     // wait for everyone to finish
     for (std::thread &t: workers) {
