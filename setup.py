@@ -32,5 +32,5 @@ setup(
     packages=find_packages(where="."),
     scripts=['client/bindpcie','client/slurm2pytorch','client/mgpurun'],
     url="https://github.com/NVIDIA/mlperf-common",
-    version="0.2",
+    version="0.3",
 )

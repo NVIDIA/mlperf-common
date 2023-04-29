@@ -1,0 +1,100 @@
+#!/bin/bash
+# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+USAGE_STRING=$(cat <<EOF
+usage: ${0} [--help] [--direct] [--verbose] FILE
+EOF
+	    )
+
+getopt --test
+[[ $? -eq 4 ]] || { echo "getopt program on this machine is too old" >&2; exit 4; }
+
+if ! temp_args=$(getopt --name "${0}" \
+			--options hdv \
+			--longoptions help,direct,verbose \
+			-- "$@")
+then
+    echo "${USAGE_STRING}" >&2
+    exit 1
+fi
+
+eval set -- "${temp_args}"
+
+set -euo pipefail
+
+quiet_tee() {
+    cat > "${1}"
+}
+
+tee_function=quiet_tee
+verbose=""
+fastmd5_extra_args=()
+while true; do
+    case "$1" in
+	-h|--help)
+	    echo "${USAGE_STRING}"
+	    exit 0
+	    ;;
+	-d|--direct)
+	    fastmd5_extra_args+=("iflag=direct")
+	    shift
+	    ;;
+	-v|--verbose)
+	    tee_function=tee
+	    verbose="1"
+	    shift
+	    ;;
+	--)
+	    shift
+	    break
+	    ;;
+	*)
+	    echo "Internal error: unrecognized option $1" >&2
+	    exit 3
+	    ;;
+    esac
+done
+
+if [[ "${1}" ]]; then
+    infile="${1}"
+else
+    echo "${USAGE_STRING}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${infile}" ]]; then
+    echo "${infile} file not found" >&2
+    exit 1
+fi
+
+bs=$((16*1024*1024))
+
+insize=$(stat --format=%s "${infile}")
+chunks=$(((insize + bs - 1) / bs)) # round up
+rounded=$((chunks*bs))
+overage=$((rounded-insize))
+processes=256
+chunks_per_process=$(( (chunks + (processes-1)) / processes )) # round up
+processes=$(( (chunks + (chunks_per_process-1)) / chunks_per_process )) # round up
+
+if [[ "${verbose}" ]]; then
+    echo "file $infile has size $insize, $chunks chunks of size $bs gets $rounded with overage $overage"
+    echo "$processes processes will each do $chunks_per_process chunks"
+fi
+
+(for i in $(seq 0 $(( processes - 1 )) ); do
+     echo -e "${i}\t$(dd "${fastmd5_extra_args[@]}" status=none bs="${bs}" skip="$((i*chunks_per_process))" count="${chunks_per_process}" if="${infile}" | md5sum)" &
+ done
+ wait) | LC_ALL=C sort -n -k1,1 | "${tee_function}" >(md5sum)
