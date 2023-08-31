@@ -84,9 +84,9 @@ class MLLoggerWrapper:
         self.start(key=constants.RUN_START, unique=True, sync=True, internal_call=True)
         self.comm_handler.barrier()
 
-    def log_run_stop(self, status, **kwargs):
+    def log_run_stop(self, status, sync=True, unique=True, unique_log_rank=0, **kwargs):
         """ Logs RUN_STOP with correct synchronization across workers. """
-        self.end(key=constants.RUN_STOP, unique=True, sync=True,
+        self.end(key=constants.RUN_STOP, unique=unique, unique_log_rank=unique_log_rank, sync=sync,
                  metadata=dict(status=status, **kwargs), internal_call=True)
 
     def log_weights_initialization(self, tensor_name):
