@@ -179,7 +179,7 @@ readFileChunk(int fd,
     assert(chunkSize > 0);
     assert(chunkSize % inputFSBlockSize == 0);
     off_t mySize = std::min(chunkSize, fileSize-offset);
-    
+
     if (mySize != chunkSize) {
         std::cerr << "thread " << threadId
                   << " is about to read the last (partial) block of the input file"
@@ -354,7 +354,7 @@ main(int argc,
 
     const std::string inFileName{argv[argc-2]};
     const std::string outFileName{argv[argc-1]};
-        
+
     int inFD = open(inFileName.c_str(), O_RDONLY|O_DIRECT);
     if (inFD < 0) {
         perror("opening input direct failed, retrying indirect");
