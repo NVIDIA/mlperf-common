@@ -23,6 +23,44 @@ USAGE_STRING="\
 usage: ${SCRIPT_NAME}
 
 "
+###############################################################################
+# variables we require, these can and should be set from outside the script
+###############################################################################
+: "${MLPERF_SUBMITTER:=""}"
+
+# division: "closed" or "open"
+: "${MLPERF_DIVISION:=""}"
+
+# status: is called "category" in the rules, and the result summarizer calls it
+# "availability"
+# https://github.com/mlcommons/policies/blob/master/submission_rules.adoc#73-results-categories
+# specifies 4 "categories": "Available in cloud", "Available on premise",
+# "Preview", and "Research, Development, or Internal", but
+# https://github.com/mlcommons/policies/blob/master/submission_rules.adoc#57-system_desc_idjson-metadata
+# does not specify what the corresponding strings should be in the "status"
+# field of system_desc_id.json.  In the past some people have used "available",
+# "onprem", "cloud", "preview", "rdi"
+: "${MLPERF_STATUS:=""}"
+
+: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-""}}}"
+: "${MLPERF_SYSTEM_NAME:=""}"
+: "${MLPERF_USE_NX:=""}"
+
+# these are all optional
+: "${MLPERF_HOST_STORAGE_TYPE:=""}"
+: "${MLPERF_HOST_STORAGE_CAPACITY:=""}"
+: "${MLPERF_HOST_NETWORKING:=""}"
+: "${MLPERF_HOST_NETWORKING_TOPOLOGY:=""}"
+: "${MLPERF_HOST_MEMORY_CONFIGURATION:=""}"
+: "${MLPERF_ACCELERATOR_HOST_INTERCONNECT:=""}"
+: "${MLPERF_ACCELERATOR_FREQUENCY:=""}"
+: "${MLPERF_ACCELERATOR_ON_CHIP_MEMORIES:=""}"
+: "${MLPERF_ACCELERATOR_MEMORY_CONFIGURATION:=""}"
+: "${MLPERF_ACCELERATOR_MEMORY_CAPACITY:=""}"
+: "${MLPERF_ACCELERATOR_INTERCONNECT:=""}"
+: "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:=""}"
+: "${MLPERF_COOLING:=""}"
+: "${MLPERF_HW_NOTES:=""}"
 
 
 # variables we derive from the NVIDIA container
@@ -40,38 +78,8 @@ usage: ${SCRIPT_NAME}
 
 NVIDIA_VERSION_VARIABLE_NAME="NVIDIA_${NVIDIA_PRODUCT_NAME^^}_VERSION"
 NVIDIA_PRODUCT_VERSION="${!NVIDIA_VERSION_VARIABLE_NAME}"
-NVIDIA_PRODUCT_VERSION_SHORT="$(sed -E 's/^(\d\d\.\d\d).*$/\1/' <<< ${NVIDIA_PRODUCT_VERSION})"
+NVIDIA_PRODUCT_VERSION_SHORT="$(sed -E 's/^(\d\d\.\d\d).*$/\1/' <<< "${NVIDIA_PRODUCT_VERSION}")"
 
-# variables we require, any of these can be set from outside the script
-: "${MLPERF_SUBMITTER:=FIXME?UNSPECIFIED_SUBMITTER}"
-
-# these variables can be set outside the script
-# division: "closed" or "open"
-: "${MLPERF_DIVISION:=FIXME?UNSPECIFIED_DIVISION}"
-# status: is called "category" in the rules, and I think the result summarizer
-# calls it "availability" I am unclear about what the expected values are.
-# We've been using onprem for "available on premises" and "preview" for preview
-: "${MLPERF_STATUS:=FIXME?UNSPECIFIED_STATUS}"
-: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-FIXME?UNKNOWN}}}"
-
-# need to define MLPERF_SYSTEM_NAME
-# it can be defined in the environment that calls this script
-# else we search for a helper script
-# that calls this script, if there's a helper script available, then use that:
-if [[ -x "./${MLPERF_SUBMITTER}-system-name.sh" ]]; then
-    source "./${MLPERF_SUBMITTER}-system-name.sh"
-fi
-# make sure MLPERF_SYSTEM_NAME is set to something
-: "${MLPERF_SYSTEM_NAME:=FIXME?UNSPECIFIED_SYSTEM_NAME}"
-
-# FIXME: this is NVIDIA specific naming convention, so not appropriate for anyone
-# other than NVIDIA (i.e., this is what should go into NVIDIA-system-name.sh)
-if [[ "${MLPERF_NUM_NODES}" -gt "1" ]]; then
-    MLPERF_SYSTEM_NAME="dgxh100_n${MLPERF_NUM_NODES}_ngc${NVIDIA_PRODUCT_VERSION_SHORT}_${NVIDIA_PRODUCT_NAME,,}"
-else
-    # we special case our system name for single node:
-    MLPERF_SYSTEM_NAME="dgxh100_ngc${NVIDIA_PRODUCT_VERSION_SHORT}_${NVIDIA_PRODUCT_NAME,,}"
-fi
 
 
 # variables we get from the OS environment inside the container
@@ -88,7 +96,7 @@ print(next( \
 : "${NVIDIA_KERNEL_DRIVER:=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader --id=0)}"
 : "${NV_ACC_NAME:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader --id=0)}"
 : "${MLPERF_ACC_NUM:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc --lines)}"
-: "${MLPERF_OS_PRETTY_NAME:=$(source <(cat /etc/os-release | grep "^PRETTY_NAME=") && echo "${PRETTY_NAME}")}"
+: "${MLPERF_OS_PRETTY_NAME:=$(sed -En -e 's/^PRETTY_NAME="([^"]*)"$/\1/p' /etc/os-release)}"
 : "${MLPERF_CPU_SOCKETS:=$(get_lscpu_info "Socket(s):")}"
 : "${MLPERF_CORES_PER_SOCKET:=$(get_lscpu_info "Core(s) per socket:")}"
 : "${MLPERF_CPU_MODEL:=$(get_lscpu_info 'Model name:')}"
@@ -112,22 +120,22 @@ OUTPUT_STRING=$(cat <<EOF
     "host_processor_caches": "",
     "host_processor_interconnect": "",
     "host_memory_capacity": "${MLPERF_HOST_MEM}",
-    "host_storage_type": "NVMe SSD",
-    "host_storage_capacity": "2x 1.92TB NVMe SSD + 30TB U.2 NVMe SSD",
-    "host_networking": "Storage: 2x ConnectX-7 IB NDR 400Gb/s, Compute: 8x ConnectX-7 IB NDR 400Gb/s, Management: 100Gb/s Ethernet NIC",
-    "host_networking_topology": "",
-    "host_memory_configuration": "",
+    "host_storage_type": "${MLPERF_HOST_STORAGE_TYPE:-}",
+    "host_storage_capacity": "${MLPERF_HOST_STORAGE_CAPACITY:-}",
+    "host_networking": "${MLPERF_HOST_NETWORKING:-}",
+    "host_networking_topology": "${MLPERF_HOST_NETWORKING_TOPOLOGY:-}",
+    "host_memory_configuration": "${MLPERF_HOST_MEMORY_CONFIGURATION:-}",
     "accelerators_per_node": "${MLPERF_ACC_NUM}",
     "accelerator_model_name": "${NV_ACC_NAME}",
-    "accelerator_host_interconnect": "",
-    "accelerator_frequency": "",
-    "accelerator_on-chip_memories": "",
-    "accelerator_memory_configuration": "HBM3",
-    "accelerator_memory_capacity": "80 GB",
-    "accelerator_interconnect": "NVLINK Gen4 900 GB/s + NVSWITCH Gen3",
-    "accelerator_interconnect_topology": "",
-    "cooling": "",
-    "hw_notes": "",
+    "accelerator_host_interconnect": "${MLPERF_ACCELERATOR_HOST_INTERCONNECT:-}",
+    "accelerator_frequency": "${MLPERF_ACCELERATOR_FREUQNCY:-}",
+    "accelerator_on-chip_memories": "${MLPERF_ACCELERATOR_ON_CHIP_MEMORIES:-}",
+    "accelerator_memory_configuration": "${MLPERF_ACCELERATOR_MEMORY_CONFIGURATION:-}",
+    "accelerator_memory_capacity": "${MLPERF_ACCELERATOR_MEMORY_CAPACITY:-}",
+    "accelerator_interconnect": "${MLPERF_ACCELERATOR_INTERCONNECT:-}",
+    "accelerator_interconnect_topology": "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:-}",
+    "cooling": "${MLPERF_COOLING:-}",
+    "hw_notes": "${MLPERF_HW_NOTES:-}",
     "framework": "${NVIDIA_PRODUCT_NAME} NVIDIA Release ${NVIDIA_PRODUCT_VERSION}",
     "other_software_stack": {
         "cuda_version": "${CUDA_VERSION}",
@@ -148,5 +156,5 @@ OUTPUT_STRING=$(cat <<EOF
 EOF
 		)
 
-echo ${OUTPUT_STRING} | python3 -m json.tool
+echo "${OUTPUT_STRING}" | python3 -m json.tool
 
