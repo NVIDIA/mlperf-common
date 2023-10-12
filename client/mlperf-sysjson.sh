@@ -37,7 +37,8 @@ usage: ${SCRIPT_NAME}
 # https://github.com/mlcommons/policies/blob/master/submission_rules.adoc#57-system_desc_idjson-metadata
 # does not specify what the corresponding strings should be in the "status"
 # field of system_desc_id.json.  In the past some people have used "available",
-# "onprem", "cloud", "preview", "rdi"
+# "onprem", "cloud", "preview", "research"
+# in 3.1 round it was clarified that 
 : "${MLPERF_STATUS:=""}"
 
 : "${MLPERF_SYSTEM_NAME:=""}"
@@ -57,8 +58,20 @@ if [[ ! ( "${MLPERF_DIVISION}" == "closed" || "${MLPERF_DIVISION}" == "open" ) ]
     exit 1
 fi
 
-
-
+# correctness check for status
+case "${MLPERF_STATUS}" in
+    "onprem"|"cloud"|"preview"|"research")
+	true ;;
+    *)
+	echo "the only legal values for MLPERF_DIVISION are" 1>&2
+	echo "onprem (means: available on premise)" 1>&2
+	echo "cloud  (means: available in cloud)"   1>&2
+	echo "preview" 1>&2
+	echo "reserach (means: research, devlopment, or internal)" 1>&2
+	exit 1
+	;;
+esac
+	
 
 
 ###############################################################################
