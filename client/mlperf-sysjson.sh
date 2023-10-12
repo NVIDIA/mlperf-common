@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,12 +24,10 @@ usage: ${SCRIPT_NAME}
 
 "
 ###############################################################################
-# variables we require, these can and should be set from outside the script
+# variables we require, these must be set from outside the script since we
+# don't have any way to calculate a reasonable default value
 ###############################################################################
 : "${MLPERF_SUBMITTER:=""}"
-
-# division: "closed" or "open"
-: "${MLPERF_DIVISION:=""}"
 
 # status: is called "category" in the rules, and the result summarizer calls it
 # "availability"
@@ -42,11 +40,30 @@ usage: ${SCRIPT_NAME}
 # "onprem", "cloud", "preview", "rdi"
 : "${MLPERF_STATUS:=""}"
 
-: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-""}}}"
 : "${MLPERF_SYSTEM_NAME:=""}"
-: "${MLPERF_USE_NX:=""}"
 
-# these are all optional
+###############################################################################
+# variables we require, but for which we can sometimes generate a reasonable
+# default.  This may be overridden from outside the script if the default isn't
+# appropriate.
+###############################################################################
+: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-""}}}"
+# division: "closed" by default, may be overridden to "open"
+: "${MLPERF_DIVISION:=closed}"
+
+# correctness check for division
+if [[ ! ( "${MLPERF_DIVISION}" == "closed" || "${MLPERF_DIVISION}" == "open" ) ]]; then
+    echo "the only legal values for MLPERF_DIVISION are 'closed' or 'open'" 1>&2
+    exit 1
+fi
+
+
+
+
+
+###############################################################################
+# optional variables, these may be set from outside the script
+###############################################################################
 : "${MLPERF_HOST_STORAGE_TYPE:=""}"
 : "${MLPERF_HOST_STORAGE_CAPACITY:=""}"
 : "${MLPERF_HOST_NETWORKING:=""}"
@@ -61,6 +78,8 @@ usage: ${SCRIPT_NAME}
 : "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:=""}"
 : "${MLPERF_COOLING:=""}"
 : "${MLPERF_HW_NOTES:=""}"
+# this one let's us 
+: "${MLPERF_USE_NX:=""}"
 
 
 # variables we derive from the NVIDIA container
