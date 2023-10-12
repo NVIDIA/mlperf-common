@@ -27,7 +27,7 @@ usage: ${SCRIPT_NAME}
 # variables we require, these must be set from outside the script since we
 # don't have any way to calculate a reasonable default value
 ###############################################################################
-: "${MLPERF_SUBMITTER:=""}"
+: "${MLPERF_SUBMITTER:="UNKNOWN_MLPERF_SUBMITTER"}"
 
 # status: is called "category" in the rules, and the result summarizer calls it
 # "availability"
@@ -39,16 +39,16 @@ usage: ${SCRIPT_NAME}
 # field of system_desc_id.json.  In the past some people have used "available",
 # "onprem", "cloud", "preview", "research"
 # in 3.1 round it was clarified that 
-: "${MLPERF_STATUS:=""}"
+: "${MLPERF_STATUS:="UNKNOWN_MLPERF_STATUS"}"
 
-: "${MLPERF_SYSTEM_NAME:=""}"
+: "${MLPERF_SYSTEM_NAME:="UNKNOWN_MLPERF_SYSTEM_NAME"}"
 
 ###############################################################################
 # variables we require, but for which we can sometimes generate a reasonable
 # default.  This may be overridden from outside the script if the default isn't
 # appropriate.
 ###############################################################################
-: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-""}}}"
+: "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-"1"}}}"
 # division: "closed" by default, may be overridden to "open"
 : "${MLPERF_DIVISION:=closed}"
 
@@ -71,8 +71,6 @@ case "${MLPERF_STATUS}" in
 	exit 1
 	;;
 esac
-	
-
 
 ###############################################################################
 # optional variables, these may be set from outside the script
@@ -91,9 +89,12 @@ esac
 : "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:=""}"
 : "${MLPERF_COOLING:=""}"
 : "${MLPERF_HW_NOTES:=""}"
-# this one let's us 
-: "${MLPERF_USE_NX:=""}"
 
+# if caller defines MLPERF_USE_NX we construct a more interesting system name
+# for multi-node systems
+if [[ "${MLPERF_USE_NX:-}" && $((MLPERF_NUM_NODES > 1)) ]]; then
+    MLPERF_SYSTEM_NAME="${MLPERF_NUM_NODES}x ${MLPERF_SYSTEM_NAME}"
+fi
 
 # variables we derive from the NVIDIA container
 : "${NVIDIA_PRODUCT_NAME:=FIXME?UNKNOWN}"
@@ -186,7 +187,6 @@ OUTPUT_STRING=$(cat <<EOF
     "sw_notes": ""
 }
 EOF
-		)
+	     )
 
-echo "${OUTPUT_STRING}" | python3 -m json.tool
-
+echo "${OUTPUT_STRING}" | python3 -m json.tool --compact
