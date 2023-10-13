@@ -21,7 +21,36 @@ set -euo pipefail
 SCRIPT_NAME=$(basename "${0}")
 USAGE_STRING="\
 usage: ${SCRIPT_NAME}
+   behavior is controlled by envvars
+   Required:
+   * MLPERF_SUBMITTER
+   * MLPERF_SYSTEM_NAME
+   * MLPERF_STATUS (must be 'onprem', 'cloud', 'preview', or 'research')
 
+   Required but usually have reasonable defaults:
+   * MLPERF_DIVISION (defaults to 'closed', may change to 'open')
+   * MLPERF_NUM_NODES (defaults to DGXNNODES if defined)
+
+   Optional:
+    * MLPERF_HOST_STORAGE_TYPE
+    * MLPERF_HOST_STORAGE_CAPACITY
+    * MLPERF_HOST_NETWORKING
+    * MLPERF_HOST_NETWORKING_TOPOLOGY
+    * MLPERF_HOST_MEMORY_CONFIGURATION
+    * MLPERF_ACCELERATOR_HOST_INTERCONNECT
+    * MLPERF_ACCELERATOR_FREQUENCY
+    * MLPERF_ACCELERATOR_ON_CHIP_MEMORIES
+    * MLPERF_ACCELERATOR_MEMORY_CONFIGURATION
+    * MLPERF_ACCELERATOR_INTERCONNECT
+    * MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY
+    * MLPERF_COOLING
+    * MLPERF_HW_NOTES
+
+    Automatically generated:
+    * most of the rest of the fields in the system json (including things like
+      * cpu sockets, cores, model name
+      * accelerator model name, quantity
+      * cuda and library versions
 "
 ###############################################################################
 # variables we require, these must be set from outside the script since we
@@ -49,12 +78,15 @@ usage: ${SCRIPT_NAME}
 # appropriate.
 ###############################################################################
 : "${MLPERF_NUM_NODES:=${DGXNNODES:-${SLURM_JOB_NUM_NODES:-"1"}}}"
+
 # division: "closed" by default, may be overridden to "open"
 : "${MLPERF_DIVISION:=closed}"
 
 # correctness check for division
 if [[ ! ( "${MLPERF_DIVISION}" == "closed" || "${MLPERF_DIVISION}" == "open" ) ]]; then
     echo "the only legal values for MLPERF_DIVISION are 'closed' or 'open'" 1>&2
+    echo
+    echo "${USAGE_STRING}"
     exit 1
 fi
 
@@ -63,11 +95,13 @@ case "${MLPERF_STATUS}" in
     "onprem"|"cloud"|"preview"|"research")
 	true ;;
     *)
-	echo "the only legal values for MLPERF_DIVISION are" 1>&2
+	echo "the only legal values for MLPERF_STATUS are" 1>&2
 	echo "onprem (means: available on premise)" 1>&2
 	echo "cloud  (means: available in cloud)"   1>&2
 	echo "preview" 1>&2
 	echo "reserach (means: research, devlopment, or internal)" 1>&2
+	echo
+	echo "${USAGE_STRING}"
 	exit 1
 	;;
 esac
@@ -84,7 +118,6 @@ esac
 : "${MLPERF_ACCELERATOR_FREQUENCY:=""}"
 : "${MLPERF_ACCELERATOR_ON_CHIP_MEMORIES:=""}"
 : "${MLPERF_ACCELERATOR_MEMORY_CONFIGURATION:=""}"
-: "${MLPERF_ACCELERATOR_MEMORY_CAPACITY:=""}"
 : "${MLPERF_ACCELERATOR_INTERCONNECT:=""}"
 : "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:=""}"
 : "${MLPERF_COOLING:=""}"
@@ -92,7 +125,7 @@ esac
 
 # if caller defines MLPERF_USE_NX we construct a more interesting system name
 # for multi-node systems
-if [[ "${MLPERF_USE_NX:-}" && $((MLPERF_NUM_NODES > 1)) ]]; then
+if [[ "${MLPERF_USE_NX:-}" ]] && ((MLPERF_NUM_NODES > 1)); then
     MLPERF_SYSTEM_NAME="${MLPERF_NUM_NODES}x ${MLPERF_SYSTEM_NAME}"
 fi
 
