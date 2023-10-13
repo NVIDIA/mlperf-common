@@ -47,7 +47,7 @@ usage: ${SCRIPT_NAME}
     * MLPERF_HW_NOTES
 
     Automatically generated:
-    * most of the rest of the fields in the system json (including things like
+    * most of the rest of the fields in the system json, including things like
       * cpu sockets, cores, model name
       * accelerator model name, quantity
       * cuda and library versions
@@ -96,10 +96,10 @@ case "${MLPERF_STATUS}" in
 	true ;;
     *)
 	echo "the only legal values for MLPERF_STATUS are" 1>&2
-	echo "onprem (means: available on premise)" 1>&2
-	echo "cloud  (means: available in cloud)"   1>&2
-	echo "preview" 1>&2
-	echo "reserach (means: research, devlopment, or internal)" 1>&2
+	echo "* onprem (means: available on premise)" 1>&2
+	echo "* cloud  (means: available in cloud)"   1>&2
+	echo "* preview" 1>&2
+	echo "* reserach (means: research, devlopment, or internal)" 1>&2
 	echo
 	echo "${USAGE_STRING}"
 	exit 1
@@ -162,7 +162,7 @@ print(next( \
 : "${NVIDIA_KERNEL_DRIVER:=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader --id=0)}"
 : "${NV_ACC_NAME:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader --id=0)}"
 : "${MLPERF_ACC_NUM:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc --lines)}"
-: "${MLPERF_ACC_MEM:=$(nvidia-smi --query-gpu= --format=csv,noheader --id=0)}"
+: "${MLPERF_ACC_MEM:=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader --id=0)}"
 : "${MLPERF_OS_PRETTY_NAME:=$(sed -En -e 's/^PRETTY_NAME="([^"]*)"$/\1/p' /etc/os-release)}"
 : "${MLPERF_CPU_SOCKETS:=$(get_lscpu_info "Socket(s):")}"
 : "${MLPERF_CORES_PER_SOCKET:=$(get_lscpu_info "Core(s) per socket:")}"
@@ -195,10 +195,10 @@ OUTPUT_STRING=$(cat <<EOF
     "accelerators_per_node": "${MLPERF_ACC_NUM}",
     "accelerator_model_name": "${NV_ACC_NAME}",
     "accelerator_host_interconnect": "${MLPERF_ACCELERATOR_HOST_INTERCONNECT:-}",
-    "accelerator_frequency": "${MLPERF_ACCELERATOR_FREUQNCY:-}",
-    "accelerator_on-chip_memories": "${MLPERF_ACC_MEM:-}",
+    "accelerator_frequency": "${MLPERF_ACCELERATOR_FREQUENCY:-}",
+    "accelerator_on-chip_memories": "${MLPERF_ACCELERATOR_ON_CHIP_MEMORIES:-}",
     "accelerator_memory_configuration": "${MLPERF_ACCELERATOR_MEMORY_CONFIGURATION:-}",
-    "accelerator_memory_capacity": "${MLPERF_ACCELERATOR_MEMORY_CAPACITY:-}",
+    "accelerator_memory_capacity": "${MLPERF_ACC_MEM:-}",
     "accelerator_interconnect": "${MLPERF_ACCELERATOR_INTERCONNECT:-}",
     "accelerator_interconnect_topology": "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:-}",
     "cooling": "${MLPERF_COOLING:-}",
