@@ -66,7 +66,7 @@ if [[ "${PYTORCH_VERSION-}" ]]; then
 	export OMP_NUM_THREADS=1
     fi
 
-    if [[ "${NV_MLPERF_DEBUG:-}" ]] && [[ "${RANK}" == "1" ]]; then
+    if [[ "${NV_MLPERF_DEBUG:-}" ]] && [[ "${RANK}" == "0" ]]; then
 	echo "slurm2pytorch: MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT} WORLD_SIZE=${WORLD_SIZE}"
     fi
 fi # end if [[ "${PYTORCH_VERSION-}" ]]
