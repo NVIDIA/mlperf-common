@@ -58,7 +58,7 @@ if [[ "${PYTORCH_VERSION-}" ]]; then
     export RANK="${RANK:-${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK}}}"
 
     # by convention we use LOCAL_RANK for torch.cuda.set_device()
-    export LOCAL_RANK="${LOCAL_RANK:-${SLURM_LOCALID:-OMPI_COMM_WORLD_LOCAL_RANK}}}"
+    export LOCAL_RANK="${LOCAL_RANK:-${SLURM_LOCALID:-${OMPI_COMM_WORLD_LOCAL_RANK}}}"
 
     # Match the behavior of torch.distributed.run:
     # https://github.com/pytorch/pytorch/blob/v1.9.0/torch/distributed/run.py#L521-L532
