@@ -25,26 +25,40 @@ set -euo pipefail
 # only if we're in a pytorch container:
 if [[ "${PYTORCH_VERSION-}" ]]; then
 
-    # MLPERF_SLURM_FIRSTNODE should be set from host scripts.  Setting it
-    # requires `scontrol` which is typically unavailable from inside
+    # MASTER_ADDR (or MLPERF_SLURM_FIRSTNODE) should be set from host scripts.
+    # Setting it requires `scontrol` which is typically unavailable from inside
     # containers.  a typical way to set it from host would be something like:
-    # $(scontrol show hostnames "${SLURM_JOB_NODELIST-}" | head -n1)
-    if [[ "${MLPERF_SLURM_FIRSTNODE-}" ]] && [[ ! "${MASTER_ADDR-}" ]]; then
-	export MASTER_ADDR="${MLPERF_SLURM_FIRSTNODE}"
-    fi
+    # $(scontrol show hostnames "${SLURM_JOB_NODELIST-}" | head -n1) if neither
+    # is set we fall back to 127.0.0.1 which will help for single-node jobs,
+    # but will fail for multinode.
+    export MASTER_ADDR="${MASTER_ADDR:-${MLPERF_SLURM_FIRSTNODE:-127.0.0.1}}"
 
-    if [[ "${SLURM_JOB_ID-}" ]] && [[ ! "${MASTER_PORT-}" ]]; then
-	export MASTER_PORT="$((${SLURM_JOB_ID} % 16384 + 49152))"
-    fi
-    if [[ "${SLURM_NTASKS-}" ]] && [[ ! "${WORLD_SIZE-}" ]]; then
-	export WORLD_SIZE="${SLURM_NTASKS}"
-    fi
-    if [[ "${SLURM_PROCID-}" ]] && [[ ! "${RANK-}" ]]; then
-	export RANK="${SLURM_PROCID}"
-    fi
-    if [[ "${SLURM_LOCALID-}" ]] && [[ ! "${LOCAL_RANK-}" ]]; then
-	export LOCAL_RANK="${SLURM_LOCALID}"
-    fi
+    # MASTER_PORT is needed for static rendezvous.  Unfortunately
+    # torch.distributed TCPStore doesn't handle races for dynamic port
+    # assignment in the ephemeral port range gracefully, so to mitigate we
+    # choose a static port number that is neither in the ephemeral port range
+    # defined by IANA (49152-65535), nor in the ephemeral port range defined by
+    # default in Ubuntu (32768-60999).  That leaves the range 1024-32767.
+    # https://github.com/pytorch/pytorch/blob/main/torch/distributed/run.py
+    # uses 29500, (and the torch distributed docs use 29501), so we also use
+    # 29500.
+    # https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt
+    # shows that 29500 is not currently assigned to anyone else, and since it
+    # is also not ephemeral it should always be free.  If your org has some
+    # other service assigned to this particular port, then find another port in
+    # 1024-32767 that is not assigned in the IANA list and manually override
+    # MASTER_PORT to that number.
+    export MASTER_PORT="${MASTER_PORT:-29500}"
+
+    # WORLD_SIZE and RANK are required for
+    # torch.distributed.init_process_group(backend='nccl',
+    # init_method='env://') we can derive appropriate values either from Slurm
+    # variables (srun) or from OMPI_COMM variables (mpirun)
+    export WORLD_SIZE="${WORLD_SIZE:-${SLURM_NTASKS:-${OMPI_COMM_WORLD_SIZE}}}"
+    export RANK="${RANK:-${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK}}}"
+
+    # by convention we use LOCAL_RANK for torch.cuda.set_device()
+    export LOCAL_RANK="${LOCAL_RANK:-${SLURM_LOCALID:-${OMPI_COMM_WORLD_LOCAL_RANK}}}"
 
     # Match the behavior of torch.distributed.run:
     # https://github.com/pytorch/pytorch/blob/v1.9.0/torch/distributed/run.py#L521-L532
@@ -52,6 +66,9 @@ if [[ "${PYTORCH_VERSION-}" ]]; then
 	export OMP_NUM_THREADS=1
     fi
 
+    if [[ "${NV_MLPERF_DEBUG:-}" ]] && [[ "${RANK}" == "0" ]]; then
+	echo "slurm2pytorch: MASTER_ADDR=${MASTER_ADDR} MASTER_PORT=${MASTER_PORT} WORLD_SIZE=${WORLD_SIZE}"
+    fi
 fi # end if [[ "${PYTORCH_VERSION-}" ]]
 
 #############################################################################
