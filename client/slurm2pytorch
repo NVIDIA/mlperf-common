@@ -53,12 +53,14 @@ if [[ "${PYTORCH_VERSION-}" ]]; then
     # WORLD_SIZE and RANK are required for
     # torch.distributed.init_process_group(backend='nccl',
     # init_method='env://') we can derive appropriate values either from Slurm
-    # variables (srun) or from OMPI_COMM variables (mpirun)
-    export WORLD_SIZE="${WORLD_SIZE:-${SLURM_NTASKS:-${OMPI_COMM_WORLD_SIZE}}}"
-    export RANK="${RANK:-${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK}}}"
+    # variables (srun) or from OMPI_COMM variables (mpirun) if we're not
+    # running under slurm or mpirun, we fall back to values appropriate for
+    # single gpu
+    export WORLD_SIZE="${WORLD_SIZE:-${SLURM_NTASKS:-${OMPI_COMM_WORLD_SIZE:-1}}}"
+    export RANK="${RANK:-${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK:-0}}}"
 
     # by convention we use LOCAL_RANK for torch.cuda.set_device()
-    export LOCAL_RANK="${LOCAL_RANK:-${SLURM_LOCALID:-${OMPI_COMM_WORLD_LOCAL_RANK}}}"
+    export LOCAL_RANK="${LOCAL_RANK:-${SLURM_LOCALID:-${OMPI_COMM_WORLD_LOCAL_RANK:-0}}}"
 
     # Match the behavior of torch.distributed.run:
     # https://github.com/pytorch/pytorch/blob/v1.9.0/torch/distributed/run.py#L521-L532
