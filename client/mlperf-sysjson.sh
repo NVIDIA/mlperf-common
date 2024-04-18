@@ -37,6 +37,7 @@ usage: ${SCRIPT_NAME}
     * MLPERF_HOST_NETWORKING
     * MLPERF_HOST_NETWORKING_TOPOLOGY
     * MLPERF_HOST_MEMORY_CONFIGURATION
+    * MLPERF_ACCELERATOR_MODEL_NAME
     * MLPERF_ACCELERATOR_HOST_INTERCONNECT
     * MLPERF_ACCELERATOR_FREQUENCY
     * MLPERF_ACCELERATOR_ON_CHIP_MEMORIES
@@ -109,6 +110,8 @@ esac
 ###############################################################################
 # optional variables, these may be set from outside the script
 ###############################################################################
+: "${MLPERF_FRAMEWORK:=""}"
+: "${MLPERF_FRAMEWORK_SHORT_NAME:=""}"
 : "${MLPERF_HOST_STORAGE_TYPE:=""}"
 : "${MLPERF_HOST_STORAGE_CAPACITY:=""}"
 : "${MLPERF_HOST_NETWORKING:=""}"
@@ -126,7 +129,7 @@ esac
 # if caller defines MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES we construct a
 # more interesting system name for multi-node systems
 if [[ "${MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES:-}" ]] && ((MLPERF_NUM_NODES > 1)); then
-    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME}_${MLPERF_NUM_NODES}"
+    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME}_n${MLPERF_NUM_NODES}"
 fi
 
 # variables we derive from the NVIDIA container
@@ -160,7 +163,7 @@ print(next( \
 }
 
 : "${NVIDIA_KERNEL_DRIVER:=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader --id=0)}"
-: "${NV_ACC_NAME:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader --id=0)}"
+: "${MLPERF_ACCELERATOR_MODEL_NAME:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader --id=0)}"
 : "${MLPERF_ACC_NUM:=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader | wc --lines)}"
 : "${MLPERF_ACC_MEM:=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader --id=0)}"
 : "${MLPERF_OS_PRETTY_NAME:=$(sed -En -e 's/^PRETTY_NAME="([^"]*)"$/\1/p' /etc/os-release)}"
@@ -169,6 +172,7 @@ print(next( \
 : "${MLPERF_CPU_MODEL:=$(get_lscpu_info 'Model name:')}"
 : "${MLPERF_HOST_MEM:=$(awk '/MemTotal/{printf "%.1f TB\n", $2/(1024*1024*1024)}' /proc/meminfo)}"
 : "${MLPERF_LINUX_KERNEL_RELEASE:=$(uname --kernel-name --kernel-release)}"
+: "${MLPERF_FRAMEWORK:="${NVIDIA_PRODUCT_NAME} NVIDIA Release ${NVIDIA_PRODUCT_VERSION}"}"
 
 
 
@@ -193,7 +197,7 @@ OUTPUT_STRING=$(cat <<EOF
     "host_networking_topology": "${MLPERF_HOST_NETWORKING_TOPOLOGY:-}",
     "host_memory_configuration": "${MLPERF_HOST_MEMORY_CONFIGURATION:-}",
     "accelerators_per_node": "${MLPERF_ACC_NUM}",
-    "accelerator_model_name": "${NV_ACC_NAME}",
+    "accelerator_model_name": "${MLPERF_ACCELERATOR_MODEL_NAME}",
     "accelerator_host_interconnect": "${MLPERF_ACCELERATOR_HOST_INTERCONNECT:-}",
     "accelerator_frequency": "${MLPERF_ACCELERATOR_FREQUENCY:-}",
     "accelerator_on-chip_memories": "${MLPERF_ACCELERATOR_ON_CHIP_MEMORIES:-}",
@@ -203,7 +207,8 @@ OUTPUT_STRING=$(cat <<EOF
     "accelerator_interconnect_topology": "${MLPERF_ACCELERATOR_INTERCONNECT_TOPOLOGY:-}",
     "cooling": "${MLPERF_COOLING:-}",
     "hw_notes": "${MLPERF_HW_NOTES:-}",
-    "framework": "${NVIDIA_PRODUCT_NAME} NVIDIA Release ${NVIDIA_PRODUCT_VERSION}",
+    "framework": "${MLPERF_FRAMEWORK}",
+    "framework_name": "${MLPERF_FRAMEWORK_SHORT_NAME:-}",
     "other_software_stack": {
         "cuda_version": "${CUDA_VERSION}",
         "cuda_driver_version": "${CUDA_DRIVER_VERSION}",
