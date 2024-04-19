@@ -128,7 +128,7 @@ esac
 
 # if caller defines MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES we construct a
 # more interesting system name for multi-node systems
-if [[ "${MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES:-}" ]] && ((MLPERF_NUM_NODES > 1)); then
+if [[ "${MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES:-0}" -eq 1 ]] && ((MLPERF_NUM_NODES > 1)); then
     MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME}_n${MLPERF_NUM_NODES}"
 fi
 
