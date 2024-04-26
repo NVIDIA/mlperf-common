@@ -12,6 +12,7 @@ for dir_path in $1; do
         echo "Error: path $dir_path is incorrect"
         exit 1
     fi
+    chmod -R +r "$dir_path"
 done
 
 exec > "$2/cont-mount-info.sh"
