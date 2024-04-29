@@ -15,6 +15,7 @@ for dir_path in $1; do
 done
 
 echo "get_mount: exec to $2/cont-mount-info.sh"
+ls
 touch "$2/cont-mount-info.sh"
 exec > "$2/cont-mount-info.sh"
 echo "declare -a directory_sizes"
