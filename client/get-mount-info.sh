@@ -1,5 +1,4 @@
 #!/bin/bash
-echo "get_mount: start"
 if ! [ "$#" -eq 2 ]; then
     echo "Error: get-mount-info.sh takes 2 arguments: 1) paths to verify 2) output path"
     exit 1
@@ -14,8 +13,7 @@ for dir_path in $1; do
     fi
 done
 
-echo "get_mount: exec to $2/cont-mount-info.sh"
-ls
+mkdir -p "$2"
 touch "$2/cont-mount-info.sh"
 exec > "$2/cont-mount-info.sh"
 echo "declare -a directory_sizes"
