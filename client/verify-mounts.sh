@@ -50,7 +50,7 @@ for dir_path in $1; do
         subdir_size=$(du -s "$subdir_to_check" | cut -f1)
 
         if [ "$subdir_size_gt" != "$subdir_size" ]; then
-            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check"
+            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size)"
             directory_sizes_counter=$directory_sizes_end
             break
         fi
