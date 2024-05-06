@@ -53,6 +53,7 @@ for dir_path in $paths_to_verify; do
 
 
     for ((; directory_sizes_counter < directory_sizes_end; directory_sizes_counter++)); do
+    echo "$directory_sizes_counter          $subdir_and_size"
         subdir_and_size=${directory_sizes[$directory_sizes_counter]}
         read -r subdir_to_check subdir_size_gt <<< "$subdir_and_size"
         subdir_to_check="$dir_path/$subdir_to_check"
