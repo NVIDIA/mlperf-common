@@ -67,7 +67,7 @@ for dir_path in $paths_to_verify; do
         subdir_size=$(du -sk "$subdir_to_check" | cut -f1)
         percentage_difference=$(get_similarity "$subdir_size_gt" "$subdir_size")
         if [ "$percentage_difference" -gt "$threshold" ]; then
-            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size)"
+            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size) $subdir_and_size"
             directory_sizes_counter=$directory_sizes_end
             break
         fi
