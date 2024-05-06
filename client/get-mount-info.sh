@@ -27,7 +27,7 @@ for dir_path in $1; do
     dir_counter=1
     while IFS= read -r subdir; do
         relative_path="${subdir#$dir_path/}"
-        subdir_size=$(du -s "$subdir" | cut -f1)
+        subdir_size=$(du -sk "$subdir" | cut -f1)
         echo "\"$relative_path,$subdir_size\""
         ((dir_counter++))
     done < <(find "$dir_path" -mindepth 1 -type d | awk -v dir_path="$dir_path" -F'/' '{print NF-1, $0}' | sort -n | cut -d' ' -f2-)
