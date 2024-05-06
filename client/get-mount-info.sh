@@ -22,7 +22,7 @@ echo "declare -a number_of_paths_in_dir"
 for dir_path in $1; do
     echo "# ----------"
     echo "directory_sizes+=("
-    dir_size=$(du -s "$dir_path" | cut -f1)
+    dir_size=$(du -sk "$dir_path" | cut -f1)
     echo "\",$dir_size\""
     dir_counter=1
     while IFS= read -r subdir; do
