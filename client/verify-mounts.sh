@@ -53,7 +53,6 @@ for dir_path in $paths_to_verify; do
 
 
     for ((; directory_sizes_counter < directory_sizes_end; directory_sizes_counter++)); do
-    echo "$directory_sizes_counter          $subdir_and_size"
         subdir_and_size=${directory_sizes[$directory_sizes_counter]}
         read -r subdir_to_check subdir_size_gt <<< "$subdir_and_size"
         subdir_to_check="$dir_path/$subdir_to_check"
@@ -68,12 +67,11 @@ for dir_path in $paths_to_verify; do
         subdir_size=$(du -sk "$subdir_to_check" | cut -f1)
         percentage_difference=$(get_similarity "$subdir_size_gt" "$subdir_size")
         if [ "$percentage_difference" -gt "$threshold" ]; then
-            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size) $subdir_and_size"
+            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size)"
             directory_sizes_counter=$directory_sizes_end
             break
         fi
     done
     ((index++))
 done
-echo "DIR CHECK OK" # TODO: REMOVE AFTER TESTS 
 IFS=$OLD_IFS
