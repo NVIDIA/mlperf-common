@@ -110,7 +110,7 @@ relative path path to the directory, its size in KB, the number of directories a
 
 ### Verify mounts
 `verify-mounts.sh` checks if a given directory is consistent with a description generated with get-mount-info.sh and takes one argument:
-`paths_to_verify` that contains paths separated by spaces.  
+`paths_to_verify` that contains paths separated by commas.  
 
 Example of use:
 ```
