@@ -68,3 +68,54 @@ sbridge.stop_prof()
 #### EmptyObject
 Current `ScaleoutBridgeBase` class replaces previous `EmptyObject` class,
 so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
+
+## Mount check
+### Get mount info
+`get-mount-info.sh` creates file with decription of given directory and takes 2 arguments:
+1. `paths_to_verify` that contains paths separated by spaces.  
+2. `output_path` that is a path to the output directory, where the file `cont-mount-info.sh` with the result of the call will be placed 
+
+Example of use:
+```
+get-mount-info.sh "\data,\checkpoints" \results
+``` 
+
+Example output in `\results\cont-mount-info.sh`:
+```
+declare -a directory_sizes
+declare -a number_of_paths_in_dir
+# ----------
+directory_sizes+=(
+",3743665220,2"
+"coco2014,1445240,3"
+"laion-400m,3742219976,2"
+"coco2014/val2014_512x512_30k,1412012,30000"
+"laion-400m/webdataset-moments-filtered,876410532,833"
+"laion-400m/webdataset-moments-filtered-encoded,2865809440,832"
+)
+number_of_paths_in_dir+=(6)
+# ----------
+directory_sizes+=(
+",52403072,5"
+"clip,7704556,3"
+"inception,93392,1"
+"sd,20888768,2"
+
+)
+number_of_paths_in_dir+=(4)
+```
+`number_of_paths_in_dir` for each path specified contains the number of subdirectories in it.  
+The fields in directory_sizes contain 3 values separated by commas:  
+relative path path to the directory, its size in KB, the number of directories and files inside it.
+
+
+
+### Verify mounts
+`verify-mounts.sh` checks if given directory is consistent with decription generated with get-mount-info.sh and takes one argument:
+1. `paths_to_verify` that contains paths separated by spaces.  
+
+Example of use:
+```
+verify-mounts.sh "\data,\checkpoints"
+```
+The directory where `verify-mounts.sh` is located should contain `cont-mount-info.sh` file generated earlier by `get-mount-info.sh`
