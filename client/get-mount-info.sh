@@ -1,6 +1,6 @@
 #!/bin/bash
 if ! [ "$#" -eq 1 ]; then
-    echo "Error: get-mount-info.sh takes 1 argument: 1) paths to verify
+    echo "Error: get-mount-info.sh takes 1 argument: 1) paths to verify"
     exit 1
 fi
 
