@@ -114,6 +114,6 @@ relative path path to the directory, its size in KB, the number of directories a
 
 Example of use:
 ```
-verify-mounts.sh "\data,\checkpoints"
+verify-mounts.sh "/data,/checkpoints"
 ```
 The directory where `verify-mounts.sh` is located should contain `cont-mount-info.sh` file generated earlier by `get-mount-info.sh`.
