@@ -72,8 +72,8 @@ so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 ## Mount check
 ### Get mount info
 `get-mount-info.sh` creates file with decription of given directory and takes 2 arguments:
-1. `paths_to_verify` that contains paths separated by spaces.  
-2. `output_path` that is a path to the output directory, where the file `cont-mount-info.sh` with the result of the call will be placed 
+1. `paths_to_verify` that contains paths separated by commas.  
+2. `output_path` that is a path to the output directory, where the file `cont-mount-info.sh` with the result of the call will be placed. 
 
 Example of use:
 ```
@@ -100,7 +100,6 @@ directory_sizes+=(
 "clip,7704556,3"
 "inception,93392,1"
 "sd,20888768,2"
-
 )
 number_of_paths_in_dir+=(4)
 ```
@@ -118,4 +117,4 @@ Example of use:
 ```
 verify-mounts.sh "\data,\checkpoints"
 ```
-The directory where `verify-mounts.sh` is located should contain `cont-mount-info.sh` file generated earlier by `get-mount-info.sh`
+The directory where `verify-mounts.sh` is located should contain `cont-mount-info.sh` file generated earlier by `get-mount-info.sh`.
