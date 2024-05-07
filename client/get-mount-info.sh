@@ -23,12 +23,14 @@ for dir_path in $1; do
     echo "# ----------"
     echo "directory_sizes+=("
     dir_size=$(du -sk "$dir_path" | cut -f1)
-    echo "\",$dir_size\""
+    num_files=&(ls -1 "$dir_path" | wc -l)
+    echo "\",$dir_size,$num_files\""
     dir_counter=1
     while IFS= read -r subdir; do
         relative_path="${subdir#$dir_path/}"
         subdir_size=$(du -sk "$subdir" | cut -f1)
-        echo "\"$relative_path,$subdir_size\""
+        num_files=&(ls -1 "$subdir_path" | wc -l)
+        echo "\"$relative_path,$subdir_size,$num_files\""
         ((dir_counter++))
     done < <(find "$dir_path" -mindepth 1 -type d | awk -v dir_path="$dir_path" -F'/' '{print NF-1, $0}' | sort -n | cut -d' ' -f2-)
     echo ")"

@@ -1,23 +1,4 @@
 #!/bin/bash
-abs() {
-    if [ $1 -ge 0 ]; then
-        echo $1
-    else
-        echo $((-$1))
-    fi
-}
-
-get_similarity() {
-    num1=$1
-    num2=$2
-
-    percentage_difference=$(( 200 * ($num1 - $num2) / ($num1 + $num2) ))
-    percentage_difference=$(abs $percentage_difference)
-
-    echo "$percentage_difference"
-    return $percentage_difference
-}
-
 
 if [ "$#" -ne 1 ]; then
     echo "Error: init_config.sh takes 1 argument: 1) paths to verify"
@@ -54,7 +35,7 @@ for dir_path in $paths_to_verify; do
 
     for ((; directory_sizes_counter < directory_sizes_end; directory_sizes_counter++)); do
         subdir_and_size=${directory_sizes[$directory_sizes_counter]}
-        read -r subdir_to_check subdir_size_gt <<< "$subdir_and_size"
+        read -r subdir_to_check subdir_size_gt num_files_gt <<< "$subdir_and_size"
         subdir_to_check="$dir_path/$subdir_to_check"
         subdir_to_check=${subdir_to_check//\/\//\/} # replace doubled slashes with single slash
 
@@ -65,11 +46,17 @@ for dir_path in $paths_to_verify; do
         fi
 
         subdir_size=$(du -sk "$subdir_to_check" | cut -f1)
-        percentage_difference=$(get_similarity "$subdir_size_gt" "$subdir_size")
-        if [ "$percentage_difference" -gt "$threshold" ]; then
-            echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check ($subdir_size_gt and $subdir_size)"
+        num_files=&(ls -1 "$subdir_to_check" | wc -l)
+        # percentage_difference=$(get_similarity "$subdir_size_gt" "$subdir_size")
+        if (( $(bc <<< "scale=2; abs($subdir_size_gt - $subdir_size) > 8") )); then 
+             echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check. Should be $subdir_size_gt, but is $subdir_size."
             directory_sizes_counter=$directory_sizes_end
-            break
+            break           
+        fi
+        if ["$num_files_gt" != "$num_files"]; then
+            echo "Error: $dir_path is incorrectly initialized. Bad number of files/dirs in $subdir_to_check. Should be $num_files_gt, but is $num_files."
+            directory_sizes_counter=$directory_sizes_end
+            break       
         fi
     done
     ((index++))
