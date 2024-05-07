@@ -1,5 +1,4 @@
 #!/bin/bash
-
 if [ "$#" -ne 1 ]; then
     echo "Error: init_config.sh takes 1 argument: 1) paths to verify"
     exit 1
@@ -46,14 +45,14 @@ for dir_path in $paths_to_verify; do
         fi
 
         subdir_size=$(du -sk "$subdir_to_check" | cut -f1)
-        num_files=&(ls -1 "$subdir_to_check" | wc -l)
+        num_files=$(ls -1 "$subdir_to_check" | wc -l)
         # percentage_difference=$(get_similarity "$subdir_size_gt" "$subdir_size")
-        if (( $(bc <<< "scale=2; abs($subdir_size_gt - $subdir_size) > 8") )); then 
+        if (( $(bc <<< "scale=2; ($subdir_size_gt - $subdir_size) > 8 || ($subdir_size - $subdir_size_gt) > 8") )); then
              echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check. Should be $subdir_size_gt, but is $subdir_size."
             directory_sizes_counter=$directory_sizes_end
             break           
         fi
-        if ["$num_files_gt" != "$num_files"]; then
+        if [ "$num_files_gt" != "$num_files" ]; then
             echo "Error: $dir_path is incorrectly initialized. Bad number of files/dirs in $subdir_to_check. Should be $num_files_gt, but is $num_files."
             directory_sizes_counter=$directory_sizes_end
             break       
