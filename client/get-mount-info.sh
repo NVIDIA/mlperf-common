@@ -1,6 +1,6 @@
 #!/bin/bash
-if ! [ "$#" -eq 2 ]; then
-    echo "Error: get-mount-info.sh takes 2 arguments: 1) paths to verify 2) output path"
+if ! [ "$#" -eq 1 ]; then
+    echo "Error: get-mount-info.sh takes 1 argument: 1) paths to verify
     exit 1
 fi
 
@@ -13,9 +13,6 @@ for dir_path in $1; do
     fi
 done
 
-mkdir -p "$2"
-touch "$2/cont-mount-info.sh"
-exec > "$2/cont-mount-info.sh"
 echo "declare -a directory_sizes"
 echo "declare -a number_of_paths_in_dir"
 

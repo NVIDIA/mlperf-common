@@ -71,16 +71,15 @@ so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 
 ## Mount check
 ### Get mount info
-`get-mount-info.sh` creates file with decription of given directory and takes 2 arguments:
+`get-mount-info.sh` creates file with decription of given directory and takes one argument:
 1. `paths_to_verify` that contains paths separated by commas.  
-2. `output_path` that is a path to the output directory, where the file `cont-mount-info.sh` with the result of the call will be placed. 
 
 Example of use:
 ```
-get-mount-info.sh "\data,\checkpoints" \results
+get-mount-info.sh "\data,\checkpoints"
 ``` 
 
-Example output in `\results\cont-mount-info.sh`:
+Example output:
 ```
 declare -a directory_sizes
 declare -a number_of_paths_in_dir
