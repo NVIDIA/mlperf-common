@@ -32,7 +32,7 @@ for dir_path in $1; do
         num_files=$(ls -1 "$subdir" | wc -l)
         echo "\"$relative_path,$subdir_size,$num_files\""
         ((dir_counter++))
-    done < <(find "$dir_path" -mindepth 1 -type d | awk -v dir_path="$dir_path" -F'/' '{print NF-1, $0}' | sort -n | cut -d' ' -f2-)
+    done < <(find "$dir_path" -mindepth 1 -type d ! -name '.*' | awk -v dir_path="$dir_path" -F'/' '{print NF-1, $0}' | sort -n | cut -d' ' -f2-)
     echo ")"
     echo "number_of_paths_in_dir+=($dir_counter)"
 done
