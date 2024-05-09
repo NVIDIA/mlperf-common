@@ -6,7 +6,6 @@ fi
 
 config_file="cont-mount-info.sh"
 paths_to_verify=$1
-threshold=10
 
 if ! [ -f "$config_file" ]; then
     echo "Error: config file path $config_file is incorrect"
@@ -46,7 +45,8 @@ for dir_path in $paths_to_verify; do
 
         subdir_size=$(du -sk "$subdir_to_check" | cut -f1)
         num_files=$(ls -1 "$subdir_to_check" | wc -l)
-        if (( $(bc <<< "scale=2; ($subdir_size_gt - $subdir_size) > 8 || ($subdir_size - $subdir_size_gt) > 8") )); then
+
+        if (( (subdir_size_gt - subdir_size) > 8 || (subdir_size - subdir_size_gt) > 8 )); then
              echo "Error: $dir_path is incorrectly initialized. Bad size of $subdir_to_check. Should be $subdir_size_gt, but is $subdir_size."
             directory_sizes_counter=$directory_sizes_end
             break           
