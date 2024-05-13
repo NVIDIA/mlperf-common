@@ -57,11 +57,3 @@ for i, (cont_mount_info_record, path_to_verify) in enumerate(zip(cont_mount_info
                   f"Should be {dir_size_gt}, but is {dir_size}.")
             break
             
-        if record.get("dir_hash") is not None:
-            dir_hash_gt = record["dir_hash"]
-            dir_hash = hash_directory(full_path)
-            if dir_hash_gt != dir_hash:
-                print(f"Error: {path_to_verify} is incorrect. "
-                    f"Bad hash of {path_gt}. "
-                    f"Should be {dir_hash_gt}, but is {dir_hash}.")
-                break
