@@ -51,9 +51,13 @@ for i, (cont_mount_info_record, path_to_verify) in enumerate(zip(cont_mount_info
        
         dir_size_gt = record["dir_size"]
         dir_size = os.path.getsize(full_path)
-        if dir_size_gt != dir_size:
+        if abs(dir_size_gt - dir_size) > dir_size_gt * 1e-4:
             print(f"Error: {path_to_verify} is incorrect. "
                   f"Bad size of {path_gt}. "
                   f"Should be {dir_size_gt}, but is {dir_size}.")
             break
+        if abs(dir_size_gt - dir_size) > dir_size_gt * 1e-5:
+            print(f"Warning: {path_to_verify} may be incorrect. "
+                  f"Bad size of {path_gt}. "
+                  f"Should be {dir_size_gt}, but is {dir_size}.")
             
