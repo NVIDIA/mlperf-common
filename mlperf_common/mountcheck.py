@@ -77,19 +77,19 @@ def verifyMount(paths_to_verify):
             elements = len([e for e in os.listdir(full_path) if not e.startswith('.')])
             if elements_gt != elements:
                 print(f"Error: {path_to_verify} is incorrect. "
-                    f"Bad number of elements in {path_gt}. "
-                    f"Should be {elements_gt}, but is {elements}.")
+                    f"Incorrect number of elements in {path_gt}. "
+                    f"Expected {elements_gt}, but found {elements}.")
                 break
         
             dir_size_gt = record["dir_size"]
             dir_size = int(du(full_path))
             if abs(dir_size_gt - dir_size) > dir_size_gt * 1e-4:
                 print(f"Error: {path_to_verify} is incorrect. "
-                    f"Bad size of {path_gt}. "
-                    f"Should be {dir_size_gt}, but is {dir_size}.")
+                    f"Incorrect size of {path_gt}. "
+                    f"Expected {dir_size_gt} kB, but is {dir_size} kB.")
                 break
             if abs(dir_size_gt - dir_size) > dir_size_gt * 1e-5:
                 print(f"Warning: {path_to_verify} may be incorrect. "
-                    f"Bad size of {path_gt}. "
-                    f"Should be {dir_size_gt}, but is {dir_size}.")
+                    f"Incorrect size of {path_gt}. "
+                    f"Expected {dir_size_gt} kB, but is {dir_size} kB.")
                 
