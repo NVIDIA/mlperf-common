@@ -21,10 +21,10 @@ def getMountInfo(paths_to_verify):
         for root, dirs, files in os.walk(dir_path):
             files = [f for f in files if not f[0] == '.']
             dirs[:] = [d for d in dirs if not d[0] == '.']
-
+            root_suffix = root[len(dir_path)+1:] # root without dir_path prefix
             records.append(
                 { 
-                    "path": "/".join(root.split("/")[1:]), # root without first dir (a/b/c --> b/c)
+                    "path": root_suffix, 
                     "elements": len(files) + len(dirs),
                     "dir_size": int(du(root))
                 }
