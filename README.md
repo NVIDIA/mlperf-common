@@ -72,17 +72,17 @@ so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 ## Mount check
 ### Get mount info
 ```
-from mlperf_common.mountcheck import getMountInfo
-getMountInfo(paths_to_verify)
+from mlperf_common.mountcheck import get_mount_info
+get_mount_info(paths_to_verify)
 ```
-`getMountInfo` prints a JSON with description of given directories.  
+`get_mount_info` prints a JSON with description of given directories.  
 `paths_to_verify` should contain paths separated by commas.  
 
 
 ### Verify mounts
 ```
-from mlperf_common.mountcheck import verifyMount
-verifyMount(paths_to_verify)
+from mlperf_common.mountcheck import verify_mount
+verify_mount(paths_to_verify)
 ```
-`verifyMount` checks if a given directory is consistent with JSON file generated with getMountInfo.   
-The directory from which `verifyMount` is run should contain `cont-mount-info.json` generated earlier by `verifyMount`.
+`verify_mount` checks if a given directory is consistent with JSON file generated with getMountInfo.   
+The directory from which `verify_mount` is run should contain `cont-mount-info.json` generated earlier by `verify_mount`.

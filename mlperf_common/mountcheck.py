@@ -6,7 +6,7 @@ import subprocess
 def du(path):
     return subprocess.check_output(['du','-sk', path]).split()[0].decode('utf-8')
 
-def getMountInfo(paths_to_verify):
+def get_mount_info(paths_to_verify):
 
     paths_to_verify = paths_to_verify.split(",")
 
@@ -41,7 +41,7 @@ def getMountInfo(paths_to_verify):
     cont_mount_info_json = json.dumps(cont_mount_info, indent=4)
     print(cont_mount_info_json)
 
-def verifyMount(paths_to_verify):
+def verify_mount(paths_to_verify):
     config_file="cont-mount-info.json"
     paths_to_verify = paths_to_verify.split(",")
     if not os.path.exists(config_file):
