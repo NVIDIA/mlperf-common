@@ -71,37 +71,13 @@ so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 
 ## Mount check
 ### Get mount info
-`get-mount-info.sh` prints a description of given directory and takes one argument:
-`paths_to_verify` that contains paths separated by commas.  
+```
+from mlperf_common.mountcheck import getMountInfo
+verifyMount(paths_to_verify)
+```
+`verifyMount(paths_to_verify)` prints a JSON with description of given directories.  
+`paths_to_verify` should contain paths separated by commas.  
 
-Example of use:
-```
-get-mount-info.sh "/data,/checkpoints"
-``` 
-
-Example output:
-```
-declare -a directory_sizes
-declare -a number_of_paths_in_dir
-# ----------
-directory_sizes+=(
-",3743665220,2"
-"coco2014,1445240,3"
-"laion-400m,3742219976,2"
-"coco2014/val2014_512x512_30k,1412012,30000"
-"laion-400m/webdataset-moments-filtered,876410532,833"
-"laion-400m/webdataset-moments-filtered-encoded,2865809440,832"
-)
-number_of_paths_in_dir+=(6)
-# ----------
-directory_sizes+=(
-",52403072,5"
-"clip,7704556,3"
-"inception,93392,1"
-"sd,20888768,2"
-)
-number_of_paths_in_dir+=(4)
-```
 `number_of_paths_in_dir` for each path specified contains the number of subdirectories in it.  
 The fields in directory_sizes contain 3 values separated by commas:  
 relative path path to the directory, its size in KB, the number of directories and files inside it.
