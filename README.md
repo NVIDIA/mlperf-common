@@ -73,23 +73,16 @@ so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 ### Get mount info
 ```
 from mlperf_common.mountcheck import getMountInfo
-verifyMount(paths_to_verify)
+getMountInfo(paths_to_verify)
 ```
-`verifyMount(paths_to_verify)` prints a JSON with description of given directories.  
+`getMountInfo` prints a JSON with description of given directories.  
 `paths_to_verify` should contain paths separated by commas.  
-
-`number_of_paths_in_dir` for each path specified contains the number of subdirectories in it.  
-The fields in directory_sizes contain 3 values separated by commas:  
-relative path path to the directory, its size in KB, the number of directories and files inside it.
-
 
 
 ### Verify mounts
-`verify-mounts.sh` checks if a given directory is consistent with a description generated with get-mount-info.sh and takes one argument:
-`paths_to_verify` that contains paths separated by commas.  
-
-Example of use:
 ```
-verify-mounts.sh "/data,/checkpoints"
+from mlperf_common.mountcheck import verifyMount
+verifyMount(paths_to_verify)
 ```
-The directory where `verify-mounts.sh` is located should contain `cont-mount-info.sh` file generated earlier by `get-mount-info.sh`.
+`verifyMount` checks if a given directory is consistent with JSON file generated with getMountInfo.   
+The directory from which `verifyMount` is run should contain `cont-mount-info.json` generated earlier by `verifyMount`.
