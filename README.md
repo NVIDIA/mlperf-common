@@ -70,19 +70,26 @@ Current `ScaleoutBridgeBase` class replaces previous `EmptyObject` class,
 so just replace `EmptyObject()` with `ScaleoutBridgeBase()`.
 
 ## Mount check
+`mountcheck.py` is a script that allows to create a JSON file with the description of the given paths and later verify the correctness of these paths based on the information from the JSON file.  
+The interface is as follows:
+```
+mountcheck.py [--check] [PATH]
+```
+
 ### Get mount info
+Usage:
 ```
-from mlperf_common.mountcheck import get_mount_info
-get_mount_info(paths_to_verify)
+./mountcheck.py --check /path/to/verify/1 path/to/verify/2 ... path/to/verify/n
 ```
-`get_mount_info` prints a JSON with description of given directories.  
-`paths_to_verify` should contain paths separated by commas.  
+In this mode `mountcheck.py` generates a description of the given directories.  
+`/path/to/verify1 path/to/verify/2 ... path/to/verify/n` is a list of directories whose description is to be created.  
+The description will be written out to the standard output in a JSON format.
 
 
 ### Verify mounts
+Usage:
 ```
-from mlperf_common.mountcheck import verify_mount
-verify_mount(paths_to_verify)
+./mountcheck.py /path/to/file.json
 ```
-`verify_mount` checks if a given directory is consistent with JSON file generated with getMountInfo.   
-The directory from which `verify_mount` is run should contain `cont-mount-info.json` generated earlier by `verify_mount`.
+In this mode `mountcheck.py` checks if a given directories are consistent with given JSON file.  
+`/path/to/file.json` abc is a JSON file with a previously generated description of the paths being verified. 
