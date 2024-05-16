@@ -1,14 +1,30 @@
+#!/usr/bin/env python3
 import sys
 import os
 import json
 import subprocess
+import argparse
+
 
 def du(path):
     return subprocess.check_output(['du','-sk', path]).split()[0].decode('utf-8')
 
 def get_mount_info(paths_to_verify):
-
-    paths_to_verify = paths_to_verify.split(",")
+    
+    def get_info_records(dir_path):
+        records = []
+        for root, dirs, files in os.walk(dir_path):
+            files = [f for f in files if not f[0] == '.']
+            dirs[:] = [d for d in dirs if not d[0] == '.']
+            records.append(
+                { 
+                    "path": root, 
+                    "elements": len(files) + len(dirs),
+                    "dir_size": int(du(root))
+                }
+            )
+        records.sort(key=lambda x: x['path'], reverse=True)
+        return records
 
     for dir_path in paths_to_verify:
         if not os.path.exists(dir_path):
@@ -17,20 +33,7 @@ def get_mount_info(paths_to_verify):
 
     cont_mount_info = []
     for dir_path in paths_to_verify:
-        records = []
-        for root, dirs, files in os.walk(dir_path):
-            files = [f for f in files if not f[0] == '.']
-            dirs[:] = [d for d in dirs if not d[0] == '.']
-            root_suffix = root[len(dir_path)+1:] # root without dir_path prefix
-            records.append(
-                { 
-                    "path": root_suffix, 
-                    "elements": len(files) + len(dirs),
-                    "dir_size": int(du(root))
-                }
-            )
-        
-        records.sort(key=lambda x: x['path'], reverse=True)
+        records = get_info_records(dir_path)
         cont_mount_info.append(
             {
                 "name": dir_path,
@@ -41,31 +44,11 @@ def get_mount_info(paths_to_verify):
     cont_mount_info_json = json.dumps(cont_mount_info, indent=4)
     print(cont_mount_info_json)
 
-def verify_mount(paths_to_verify):
-    config_file="cont-mount-info.json"
-    paths_to_verify = paths_to_verify.split(",")
-    if not os.path.exists(config_file):
-        print(f"{config_file} does not exist")
-        sys.exit(1)
+def verify_mount(cont_mount_info):
 
-    with open(config_file, 'r') as config_file_read:
-        cont_mount_info = json.load(config_file_read)
-
-
-    if len(paths_to_verify) != len(cont_mount_info):
-        print(f"Error: "
-            f"There are {len(paths_to_verify)} paths ordered to be verified. "
-            f"The {config_file} file contains {len(cont_mount_info)}.")
-
-    for i, (cont_mount_info_record, path_to_verify) in enumerate(zip(cont_mount_info, paths_to_verify)):
-        if cont_mount_info_record["name"]is not None and path_to_verify != cont_mount_info_record["name"]:
-            print(f"Warning: The name of path #{i} given for verification "
-                f"is different from the one in the {config_file} file. " 
-                f"\"{path_to_verify}\" is given. "
-                f"In the {config_file} file it is \"{cont_mount_info_record['name']}\".")
-            
+    for cont_mount_info_record in cont_mount_info:
+        path_to_verify=cont_mount_info_record["name"]
         for record in cont_mount_info_record["subdirs"]:
-
             path_gt = record["path"]
             full_path = os.path.join(path_to_verify, path_gt)
             if not os.path.exists(full_path):
@@ -92,4 +75,30 @@ def verify_mount(paths_to_verify):
                 print(f"Warning: {path_to_verify} may be incorrect. "
                     f"Incorrect size of {path_gt}. "
                     f"Expected {dir_size_gt} kB, but is {dir_size} kB.")
+    print(f'Verification completed. See above for all warnings and errors.')
                 
+def main():
+    parser = argparse.ArgumentParser(description='Mount checker')
+
+    parser.add_argument('--check', action='store_true', help='Checking mode')
+    parser.add_argument('path', nargs='*', help='Path to JSON file')
+
+    args = parser.parse_args()
+
+    if args.check:
+        if len(args.path) == 1:
+            with open(args.path[0], 'r') as config_file_read:
+                cont_mount_info = json.load(config_file_read)
+        elif len(args.path) == 0:
+            cont_mount_info = json.load(sys.stdin)
+        else:
+            raise Exception("Single PATH or no PATH is required in checking mode")
+        verify_mount(cont_mount_info)
+    else:
+        if len(args.path) == 0:
+            raise Exception("PATH is required in print mode")
+        get_mount_info(args.path)
+
+
+if __name__ == '__main__':
+    main()
