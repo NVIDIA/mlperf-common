@@ -79,10 +79,10 @@ mountcheck.py [--check] [PATH]
 ### Get mount info
 Usage:
 ```
-./mountcheck.py --check /path/to/verify/1 path/to/verify/2 ... path/to/verify/n
+./mountcheck.py --check /path/to/verify/1 /path/to/verify/2 ... /path/to/verify/n
 ```
 In this mode `mountcheck.py` generates a description of the given directories.  
-`/path/to/verify1 path/to/verify/2 ... path/to/verify/n` is a list of directories whose description is to be created.  
+`/path/to/verify1 /path/to/verify/2 ... /path/to/verify/n` is a list of directories whose description is to be created.  
 The description will be written out to the standard output in a JSON format.
 
 
