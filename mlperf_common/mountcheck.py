@@ -50,14 +50,13 @@ def verify_mount(cont_mount_info):
         path_to_verify=cont_mount_info_record["name"]
         for record in cont_mount_info_record["subdirs"]:
             path_gt = record["path"]
-            full_path = os.path.join(path_to_verify, path_gt)
-            if not os.path.exists(full_path):
+            if not os.path.exists(path_gt):
                 print(f"Error: {path_to_verify} is incorrect. Path {path_gt} is missing")
-                print(f"{full_path}")
+                print(f"{path_gt}")
                 break
 
             elements_gt = record["elements"]
-            elements = len([e for e in os.listdir(full_path) if not e.startswith('.')])
+            elements = len([e for e in os.listdir(path_gt) if not e.startswith('.')])
             if elements_gt != elements:
                 print(f"Error: {path_to_verify} is incorrect. "
                     f"Incorrect number of elements in {path_gt}. "
@@ -65,7 +64,7 @@ def verify_mount(cont_mount_info):
                 break
         
             dir_size_gt = record["dir_size"]
-            dir_size = int(du(full_path))
+            dir_size = int(du(path_gt))
             if abs(dir_size_gt - dir_size) > dir_size_gt * 1e-4:
                 print(f"Error: {path_to_verify} is incorrect. "
                     f"Incorrect size of {path_gt}. "
