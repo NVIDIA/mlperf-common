@@ -9,23 +9,22 @@ import argparse
 def du(path):
     return subprocess.check_output(['du','-sk', path]).split()[0].decode('utf-8')
 
-def get_mount_info(paths_to_verify):
-    
-    def get_info_records(dir_path):
-        records = []
-        for root, dirs, files in os.walk(dir_path):
-            files = [f for f in files if not f[0] == '.']
-            dirs[:] = [d for d in dirs if not d[0] == '.']
-            records.append(
-                { 
-                    "path": root, 
-                    "elements": len(files) + len(dirs),
-                    "dir_size": int(du(root))
-                }
-            )
-        records.sort(key=lambda x: x['path'], reverse=True)
-        return records
+def get_info_records(dir_path):
+    records = []
+    for root, dirs, files in os.walk(dir_path):
+        files = [f for f in files if not f[0] == '.']
+        dirs[:] = [d for d in dirs if not d[0] == '.']
+        records.append(
+            { 
+                "path": root, 
+                "elements": len(files) + len(dirs),
+                "dir_size": int(du(root))
+            }
+        )
+    records.sort(key=lambda x: x['path'], reverse=True)
+    return records
 
+def get_mount_info(paths_to_verify):
     for dir_path in paths_to_verify:
         if not os.path.exists(dir_path):
             print("Error: path $dir_path is incorrect")
@@ -43,6 +42,7 @@ def get_mount_info(paths_to_verify):
         
     cont_mount_info_json = json.dumps(cont_mount_info, indent=4)
     print(cont_mount_info_json)
+    return cont_mount_info
 
 def verify_mount(cont_mount_info):
 
