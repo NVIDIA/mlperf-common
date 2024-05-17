@@ -27,7 +27,7 @@ def get_info_records(dir_path):
 def get_mount_info(paths_to_verify):
     for dir_path in paths_to_verify:
         if not os.path.exists(dir_path):
-            print("Error: path $dir_path is incorrect")
+            print(f"Error: path {dir_path} is incorrect")
             sys.exit(1)
 
     cont_mount_info = []
@@ -76,7 +76,23 @@ def verify_mount(cont_mount_info):
                     f"Expected {dir_size_gt} kB, but is {dir_size} kB.")
     print(f'Verification completed. See above for all warnings and errors.')
                 
-def main():
+def main(*path, check=False):
+    if check:
+        if len(path) == 1:
+            with open(path[0], 'r') as config_file_read:
+                cont_mount_info = json.load(config_file_read)
+        elif len(path) == 0:
+            cont_mount_info = json.load(sys.stdin)
+        else:
+            raise Exception("Single PATH or no PATH is required in checking mode")
+        verify_mount(cont_mount_info)
+    else:
+        if len(path) == 0:
+            raise Exception("PATH is required in print mode")
+        get_mount_info(path)
+
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Mount checker')
 
     parser.add_argument('--check', action='store_true', help='Checking mode')
@@ -84,20 +100,4 @@ def main():
 
     args = parser.parse_args()
 
-    if args.check:
-        if len(args.path) == 1:
-            with open(args.path[0], 'r') as config_file_read:
-                cont_mount_info = json.load(config_file_read)
-        elif len(args.path) == 0:
-            cont_mount_info = json.load(sys.stdin)
-        else:
-            raise Exception("Single PATH or no PATH is required in checking mode")
-        verify_mount(cont_mount_info)
-    else:
-        if len(args.path) == 0:
-            raise Exception("PATH is required in print mode")
-        get_mount_info(args.path)
-
-
-if __name__ == '__main__':
-    main()
+    main(args.path, args.check)
