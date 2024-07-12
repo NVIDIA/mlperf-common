@@ -88,10 +88,10 @@ get_lscpu_value() {
 }
 lscpu_out=$(lscpu)
 num_sockets=$(get_lscpu_value 'Socket(s)' <<< "${lscpu_out}")
-num_nodes=$(get_lscpu_value 'NUMA node(s)' <<< "${lscpu_out}")
+num_nodes=$(get_lscpu_value 'NUMA node[0-9]+ CPU(s)' <<< "${lscpu_out}" | grep -v '^$' | wc -l)
 cores_per_socket=$(get_lscpu_value 'Core(s) per socket' <<< "${lscpu_out}")
 
-echo "num_gpus=${num_gpus} num_sockets = ${num_sockets} num_nodes=${num_nodes} cores_per_socket=${cores_per_socket}"
+echo "num_gpus=${num_gpus} num_sockets=${num_sockets} num_nodes=${num_nodes} cores_per_socket=${cores_per_socket}"
 
 readonly cores_per_node=$(( (num_sockets * cores_per_socket) / num_nodes ))
 if [[ "${num_gpus}" -gt "1" ]] && [[ "${num_gpus}" -ge "${num_nodes}" ]]; then
