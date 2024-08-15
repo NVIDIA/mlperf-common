@@ -44,10 +44,15 @@ if [[ "${PYTORCH_VERSION-}" ]]; then
     # 29500.
     # https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.txt
     # shows that 29500 is not currently assigned to anyone else, and since it
-    # is also not ephemeral it should always be free.  If your org has some
-    # other service assigned to this particular port, then find another port in
-    # 1024-32767 that is not assigned in the IANA list and manually override
-    # MASTER_PORT to that number.
+    # is also not ephemeral it should always be free.  If you are having
+    # trouble with this port, your organization may have a service assigned to
+    # this port, or may have assigned a different ephemeral port range.  In
+    # Linux you can check your server's ephemeral port range by using `cat
+    # /proc/sys/net/ipv4/ip_local_port_range`.  If your org is using port 29500
+    # as part of its ephemeral range, then manually override MASTER_PORT to
+    # some value outside that range (and also not assigned to a static service
+    # in your org).  ports in the range 61000-65535 are more often than not a
+    # good alternative on Linux systems.
     export MASTER_PORT="${MASTER_PORT:-29500}"
 
     # WORLD_SIZE and RANK are required for
