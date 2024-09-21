@@ -25,7 +25,8 @@ usage: ${SCRIPT_NAME}
    Required:
    * MLPERF_SUBMITTER
    * MLPERF_SYSTEM_NAME
-   * MLPERF_STATUS (must be 'onprem', 'cloud', 'preview', or 'research')
+   * MLPERF_STATUS (must be 'Available on-premise', 'Available cloud', 'Preview',
+                    or 'Research, Development, or Internal (RDI)')
 
    Required but usually have reasonable defaults:
    * MLPERF_DIVISION (defaults to 'closed', may change to 'open')
@@ -68,8 +69,15 @@ usage: ${SCRIPT_NAME}
 # does not specify what the corresponding strings should be in the "status"
 # field of system_desc_id.json.  In the past some people have used "available",
 # "onprem", "cloud", "preview", "research"
-# in 3.1 round it was clarified that 
-: "${MLPERF_STATUS:="UNKNOWN_MLPERF_STATUS"}"
+
+# in 4.1 round it was clarified that the only legal values are "Available
+# on-premise", "Available cloud", "Research, Development, or Internal (RDI)",
+# "Preview"
+# https://github.com/mlcommons/logging/blob/master/mlperf_logging/system_desc_checker/system_desc_checker.py#L100
+
+# now defaulting to a legal value so this script generally succeeds rather than
+# fails:
+: "${MLPERF_STATUS:="Available on-premise"}"
 
 : "${MLPERF_SYSTEM_NAME:="UNKNOWN_MLPERF_SYSTEM_NAME"}"
 
@@ -93,14 +101,14 @@ fi
 
 # correctness check for status
 case "${MLPERF_STATUS}" in
-    "onprem"|"cloud"|"preview"|"research")
+    "Available on-premise"|"Available cloud"|"Preview"|"Research, Development, or Internal (RDI)")
 	true ;;
     *)
 	echo "the only legal values for MLPERF_STATUS are" 1>&2
-	echo "* onprem (means: available on premise)" 1>&2
-	echo "* cloud  (means: available in cloud)"   1>&2
-	echo "* preview" 1>&2
-	echo "* reserach (means: research, devlopment, or internal)" 1>&2
+	echo "* Available on-premise" 1>&2
+	echo "* Available cloud"   1>&2
+	echo "* Preview" 1>&2
+	echo "* Research, Devlopment, or Internal (RDI)" 1>&2
 	echo
 	echo "${USAGE_STRING}"
 	exit 1
