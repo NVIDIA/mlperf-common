@@ -18,6 +18,11 @@ set -euo pipefail
 
 [[ "${DEBUG:-}" ]] && set -x
 
+STATUS_ONPREM_LONG="Available on-premise"
+STATUS_CLOUD_LONG="Available cloud"
+STATUS_PREVIEW_LONG="Preview"
+STATUS_RDI_LONG="Research, Development, or Internal (RDI)"
+
 SCRIPT_NAME=$(basename "${0}")
 USAGE_STRING="\
 usage: ${SCRIPT_NAME}
@@ -25,8 +30,8 @@ usage: ${SCRIPT_NAME}
    Required:
    * MLPERF_SUBMITTER
    * MLPERF_SYSTEM_NAME
-   * MLPERF_STATUS (must be 'Available on-premise', 'Available cloud', 'Preview',
-                    or 'Research, Development, or Internal (RDI)')
+   * MLPERF_STATUS (must be '$STATUS_ONPREM_LONG', '$STATUS_CLOUD_LONG', '$STATUS_PREVIEW_LONG',
+                    or '$STATUS_RDI_LONG')
 
    Required but usually have reasonable defaults:
    * MLPERF_DIVISION (defaults to 'closed', may change to 'open')
@@ -77,7 +82,7 @@ usage: ${SCRIPT_NAME}
 
 # now defaulting to a legal value so this script generally succeeds rather than
 # fails:
-: "${MLPERF_STATUS:="Available on-premise"}"
+: "${MLPERF_STATUS:="$STATUS_ONPREM_LONG"}"
 
 : "${MLPERF_SYSTEM_NAME:="UNKNOWN_MLPERF_SYSTEM_NAME"}"
 
@@ -99,16 +104,29 @@ if [[ ! ( "${MLPERF_DIVISION}" == "closed" || "${MLPERF_DIVISION}" == "open" ) ]
     exit 1
 fi
 
-# correctness check for status
+# correctness check for status, also autoconverts from old short status strings
+# to long to keep backwards compatability
 case "${MLPERF_STATUS}" in
-    "Available on-premise"|"Available cloud"|"Preview"|"Research, Development, or Internal (RDI)")
+    "$STATUS_ONPREM_LONG"|"$STATUS_CLOUD_LONG"|"$STATUS_PREVIEW_LONG"|"$STATUS_RDI_LONG")
 	true ;;
+    "onprem")
+	MLPERF_STATUS="$STATUS_ONPREM_LONG"
+	;;
+    "cloud")
+	MLPERF_STATUS="$STATUS_CLOUD_LONG"
+	;;
+    "preview")
+	MLPERF_STATUS="$STATUS_PREVIEW_LONG"
+	;;
+    "research")
+	MLPERF_STATUS="$STATUS_RDI_LONG"
+	;;
     *)
 	echo "the only legal values for MLPERF_STATUS are" 1>&2
-	echo "* Available on-premise" 1>&2
-	echo "* Available cloud"   1>&2
-	echo "* Preview" 1>&2
-	echo "* Research, Devlopment, or Internal (RDI)" 1>&2
+	echo "* $STATUS_ONPREM_LONG" 1>&2
+	echo "* $STATUS_CLOUD_LONG"   1>&2
+	echo "* $STATUS_PREVIEW_LONG" 1>&2
+	echo "* $STATUS_RDI_LONG" 1>&2
 	echo
 	echo "${USAGE_STRING}"
 	exit 1
