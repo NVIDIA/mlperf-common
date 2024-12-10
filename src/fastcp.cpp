@@ -77,7 +77,7 @@ createAlignedUniqueBuffer(size_t alignment, size_t size)
                 "createAlignedUniqueBuffer requires alignment power of 2";
         } else if (memalign_error == ENOMEM) {
             std::cerr
-                << "createAlignedUniqueBuffer out of memory"
+                << "createAlignedUniqueBuffer out of memory";
         } else {
             std::cerr
                 << "createAlignedUniqueBuffer unknown error "
@@ -154,6 +154,7 @@ isPowerOfTwo(T x)
     return (x > 0) && ((x & (x-1)) == 0);
 }
 
+#if 0
 // much like pread()
 //
 // read up to chunkSize bytes from file descriptor fd at offset offset (from
@@ -243,6 +244,7 @@ readFileChunk(int fd,
                   << std::endl;
     } while (1);
 }
+#endif
 
 void
 worker(pile_type* pile,
