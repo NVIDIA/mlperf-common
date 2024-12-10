@@ -87,7 +87,7 @@ createAlignedUniqueBuffer(size_t alignment, size_t size)
         exit(1);
     }
 
-    return buffer;
+    return UniqueBuffer(buffer);
 }
 
 
@@ -378,7 +378,7 @@ main(int argc,
         exit(1);
     }
 
-    off_t maxChunks = ceilDiv(fileSize, args.bufSize);
+    off_t maxChunks = ceilDiv(fileSize, static_cast<off_t>(args.bufSize));
     std::cout << "infile name is " << inFileName << std::endl;
     std::cout << "outfile name is " << outFileName << std::endl;
     std::cout << "file size is " << fileSize << std::endl;
