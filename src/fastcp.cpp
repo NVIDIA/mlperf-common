@@ -252,7 +252,6 @@ void
 worker(pile_type* pile,
        int threadId,
        int inFD,
-//       char* outBuf,
        int outFD,
        ssize_t bufferSize,
        off_t maxChunks,
@@ -438,15 +437,7 @@ main(int argc,
         return (1);
     }
     off_t outFsBlockSize = getFileSystemBlockSize(outFD);
-
-//    off_t maxInFileBlocks = ceilDiv(fileSize, inFsBlockSize);
-
-//    void* outBuf = mmap(NULL, maxInFileBlocks * inFsBlockSize, PROT_READ|PROT_WRITE, MAP_SHARED,
-//                        outFD, 0);
-//    if (outBuf == MAP_FAILED) {
-//        perror("mmap to allocate memory for cache failed");
-//        return (1);
-//    }
+    std::cout << "the output fs block size is " << outFsBlockSize << std::endl;
 
     std::cerr << "starting threads" << std::endl;
     pile_type the_pile{0};
@@ -457,7 +448,6 @@ main(int argc,
                                       i,
                                       inFD,
                                       outFD,
-//                                      static_cast<char*>(outBuf),
                                       args.bufSize,
                                       maxChunks,
                                       fileSize,
