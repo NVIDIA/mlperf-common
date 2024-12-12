@@ -270,7 +270,7 @@ worker(pile_type* pile,
         // O_DIRECT read size for last block needs to be very very specific: it
         // needs to be an exact multiple of the filesystem block size on which
         // the file resides, but it can't be more than a single block larger!
-        off_t myReadSize = ceilDiv(mySize, inputFSBlockSize) * inputFSBlockSize;
+        off_t myReadSize = roundUp(mySize, inputFSBlockSize);
         if (mySize != bufferSize) {
             std::cerr << "thread " << threadId
                       << " is about to read the last (partial) block of the input file"
@@ -331,7 +331,7 @@ worker(pile_type* pile,
         // it needs to be an exact multiple of the filesystem block size on
         // which the file resides.  we take care of any extra garbage written
         // later by using truncate to trim the file back to its correct size
-        off_t myWriteSize = ceilDiv(mySize, outputFSBlockSize) * outputFSBlockSize;
+        off_t myWriteSize = roundUp(mySize, outputFSBlockSize);
         do {
             off_t writeResult = pwrite(outFD,
                                        myBuf.get(),
