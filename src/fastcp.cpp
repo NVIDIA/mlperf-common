@@ -38,6 +38,8 @@ const ssize_t GiB = KiB * MiB;
 const ssize_t TiB = KiB * GiB;
 const ssize_t PiB = KiB * TiB;
 
+const ssize_t minBufSize = 2 * MiB;
+
 struct CmdLineArgs {
     cmdline::Param<bool>    help       {"-?", "--help",
                                         "this message"};
@@ -250,12 +252,15 @@ void
 worker(pile_type* pile,
        int threadId,
        int inFD,
-       char* outBuf,
+//       char* outBuf,
+       int outFD,
        ssize_t bufferSize,
        off_t maxChunks,
        off_t fileSize,
-       off_t inputFSBlockSize)
+       off_t inputFSBlockSize,
+       off_t outputFSBlockSize)
 {
+    UniqueBuffer myBuf = createAlignedUniqueBuffer(std::min(bufferSize, minBufSize), bufferSize);
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
         off_t myOffset = i*bufferSize;
         assert (myOffset < fileSize);
@@ -285,7 +290,7 @@ worker(pile_type* pile,
         }
         do {
             off_t readResult = pread(inFD,
-                                     outBuf+myOffset, // buffer offset
+                                     myBuf.get(), // buffer offset
                                      myReadSize,      // size of read
                                      myOffset);       // file offset
 
@@ -322,7 +327,45 @@ worker(pile_type* pile,
                       << ": retrying"
                       << std::endl;
         } while (1);
+        // O_DIRECT write size for last block needs to be very very specific:
+        // it needs to be an exact multiple of the filesystem block size on
+        // which the file resides.  we take care of any extra garbage written
+        // later by using truncate to trim the file back to its correct size
+        off_t myWriteSize = ceilDiv(mySize, outputFSBlockSize) * outputFSBlockSize;
+        do {
+            off_t writeResult = pwrite(outFD,
+                                       myBuf.get(),
+                                       myWriteSize,
+                                       myOffset);
+            if (writeResult == myWriteSize) {
+                // expected case - done with loop!
+                break;
+            }
+
+            // noisy failure cases
+            assert (writeResult < mySize);
+            if ((writeResult < 0) && (errno != EINTR)) {
+                perror("failure during write");
+                std::cerr << "thread " << threadId
+                          << " got unexpected error while writing offset "
+                          << myOffset
+                          << std::endl
+                          << "write result is "
+                          << writeResult
+                          << std::endl;
+                break;
+            }
+
+            // retry case
+            std::cerr << "thread " << threadId
+                      << " got partial or interrupted write of size " << writeResult
+                      << " when trying to write offset " << myOffset
+                      << ": retrying"
+                      << std::endl;
+        } while (1);
+                
     }
+    
 }
 
 int
@@ -345,9 +388,9 @@ main(int argc,
         exit(1);
     }
 
-    if ((args.bufSize % 2*MiB) != 0) {
+    if ((args.bufSize % minBufSize) != 0) {
         std::cerr << "Error: --buf-size must be a multiple of 2MiB ("
-                  << 2*MiB << ")"
+                  << minBufSize << ")"
                   <<std::endl;
         std::cerr << usageString << std::endl;
         std::cerr << cmdline::helpMsg() << std::endl;
@@ -367,7 +410,7 @@ main(int argc,
         }
     }
     off_t fileSize = getFileSize(inFD);
-    off_t fsBlockSize = getFileSystemBlockSize(inFD);
+    off_t inFsBlockSize = getFileSystemBlockSize(inFD);
     if (fileSize < 0) {
         std::cerr
             << "Error: could not find valid file size for input file "
@@ -383,26 +426,27 @@ main(int argc,
     std::cout << "outfile name is " << outFileName << std::endl;
     std::cout << "file size is " << fileSize << std::endl;
     std::cout << "the read size is " << args.bufSize << std::endl;
-    std::cout << "the input fs block size is " << fsBlockSize << std::endl;
+    std::cout << "the input fs block size is " << inFsBlockSize << std::endl;
     std::cout << "max chunks is " << maxChunks << std::endl;
     std::cout << "the number of threads will be " << args.numThreads << std::endl;
 
     int outFD = open(outFileName.c_str(),
-                     O_CREAT|O_RDWR,
+                     O_CREAT|O_RDWR|O_DIRECT,
                      S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
     if (outFD < 0) {
         perror("opening outfile failed");
         return (1);
     }
+    off_t outFsBlockSize = getFileSystemBlockSize(outFD);
 
-    off_t maxInFileBlocks = ceilDiv(fileSize, fsBlockSize);
+//    off_t maxInFileBlocks = ceilDiv(fileSize, inFsBlockSize);
 
-    void* outBuf = mmap(NULL, maxInFileBlocks * fsBlockSize, PROT_READ|PROT_WRITE, MAP_SHARED,
-                        outFD, 0);
-    if (outBuf == MAP_FAILED) {
-        perror("mmap to allocate memory for cache failed");
-        return (1);
-    }
+//    void* outBuf = mmap(NULL, maxInFileBlocks * inFsBlockSize, PROT_READ|PROT_WRITE, MAP_SHARED,
+//                        outFD, 0);
+//    if (outBuf == MAP_FAILED) {
+//        perror("mmap to allocate memory for cache failed");
+//        return (1);
+//    }
 
     std::cerr << "starting threads" << std::endl;
     pile_type the_pile{0};
@@ -412,11 +456,13 @@ main(int argc,
                                       &the_pile,
                                       i,
                                       inFD,
-                                      static_cast<char*>(outBuf),
+                                      outFD,
+//                                      static_cast<char*>(outBuf),
                                       args.bufSize,
                                       maxChunks,
                                       fileSize,
-                                      fsBlockSize));
+                                      inFsBlockSize,
+                                      outFsBlockSize));
     }
     // wait for everyone to finish
     for (std::thread &t: workers) {
