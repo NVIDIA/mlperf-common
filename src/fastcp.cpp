@@ -32,13 +32,13 @@
 
 #include "cmdline.h"
 
-const ssize_t KiB = 1024;
-const ssize_t MiB = KiB * KiB;
-const ssize_t GiB = KiB * MiB;
-const ssize_t TiB = KiB * GiB;
-const ssize_t PiB = KiB * TiB;
+constexpr ssize_t KiB = 1024;
+constexpr ssize_t MiB = KiB * KiB;
+constexpr ssize_t GiB = KiB * MiB;
+constexpr ssize_t TiB = KiB * GiB;
+constexpr ssize_t PiB = KiB * TiB;
 
-const ssize_t minBufSize = 2 * MiB;
+constexpr ssize_t minBufSize = 2 * MiB;
 
 struct CmdLineArgs {
     cmdline::Param<bool>    help       {"-?", "--help",
@@ -156,7 +156,6 @@ isPowerOfTwo(T x)
     return (x > 0) && ((x & (x-1)) == 0);
 }
 
-#if 0
 // much like pread()
 //
 // read up to chunkSize bytes from file descriptor fd at offset offset (from
@@ -177,13 +176,19 @@ readFileChunk(int fd,
               off_t inputFSBlockSize,
               int threadId)
 {
-    assert(offset < fileSize);
     assert(inputFSBlockSize > 0);
     assert(chunkSize > 0);
-    assert(chunkSize % inputFSBlockSize == 0);
-    off_t mySize = std::min(chunkSize, fileSize-offset);
+    assert(offset + chunkSize <= fileSize);
 
-    if (mySize != chunkSize) {
+    // O_DIRECT read size for last block needs to be very very specific: it
+    // needs to be an exact multiple of the filesystem block size on which
+    // the file resides, but it can't be more than a single block larger!
+    off_t myReadSize = roundUp(chunkSize, inputFSBlockSize);
+    // alignment requirements for ODIRECT reads:
+    assert(myReadSize % inputFSBlockSize == 0);
+    assert(reinterpret_cast<intptr_t>(buf) % inputFSBlockSize == 0);
+    assert(offset % inputFSBlockSize == 0);
+    if (myReadSize != chunkSize) {
         std::cerr << "thread " << threadId
                   << " is about to read the last (partial) block of the input file"
                   << std::endl
@@ -193,36 +198,35 @@ readFileChunk(int fd,
                   << "offset is "
                   << offset
                   << std::endl
-                  << "size is "
-                  << mySize
+                  << "request size is "
+                  << chunkSize
                   << std::endl
                   << "read size is "
                   << myReadSize
                   << std::endl;
     }
-    while (myReadSize > 0) {
-        // alignment requirements for ODIRECT reads:
-        assert(myReadSize % inputFSBlockSize == 0);
-        assert(reinterpret_cast<intptr_t>(buf) % inputFSBlockSize == 0);
-        assert(offset % inputFSBlockSize == 0);
-        off_t readResult = pread(inFD,
+    do {
+        off_t readResult = pread(fd,
                                  buf,
                                  myReadSize,      // size of read
                                  offset);         // file offset
 
-        if (readResult == mySize) {
+        // with O_DIRECT even though we need to ask for the rounded up size,
+        // the number of bytes we get should be the number left in the file,
+        // not extra garbage at the end of the rounded up block.
+        if (readResult == chunkSize) {
             // expected case - done with loop!
-            break;
+            return readResult;
         }
 
         // noisy failure cases
-        assert (readResult < mySize);
+        assert (readResult < chunkSize);
         if (readResult == 0) {
             std::cerr << "thread " << threadId
                       << " got unexpected end-of-file while reading offset "
                       << offset
                       << std::endl;
-            break;
+            return readResult;
         }
         if ((readResult < 0) && (errno != EINTR)) {
             perror("failure during read");
@@ -233,20 +237,18 @@ readFileChunk(int fd,
                       << "read result is "
                       << readResult
                       << std::endl;
-            break;
+            return readResult;
         }
 
-        // retry case (EINTR during pread call so only got partial read)
-        mySize -= readResult;
-        myReadSize -= readResult;
+        // retry case
         std::cerr << "thread " << threadId
                   << " got partial or interrupted read of size " << readResult
                   << " when trying to read offset " << offset
                   << ": retrying"
                   << std::endl;
     } while (1);
+    return -1;
 }
-#endif
 
 void
 worker(pile_type* pile,
@@ -262,6 +264,20 @@ worker(pile_type* pile,
     UniqueBuffer myBuf = createAlignedUniqueBuffer(std::min(bufferSize, minBufSize), bufferSize);
     for (int i = pile->fetch_add(1); i < maxChunks; i = pile->fetch_add(1)) {
         off_t myOffset = i*bufferSize;
+        off_t mySize = std::min(bufferSize, fileSize-myOffset);
+
+        auto readResult = readFileChunk(inFD,
+                                        myBuf.get(),
+                                        mySize,
+                                        myOffset,
+                                        fileSize,
+                                        inputFSBlockSize,
+                                        threadId);
+        if (readResult != mySize) {
+            perror("failure calling readFileChunk()");
+            continue;
+        }
+#if 0
         assert (myOffset < fileSize);
         off_t mySize = std::min(bufferSize, fileSize-myOffset);
 
@@ -326,6 +342,7 @@ worker(pile_type* pile,
                       << ": retrying"
                       << std::endl;
         } while (1);
+#endif
         // O_DIRECT write size for last block needs to be very very specific:
         // it needs to be an exact multiple of the filesystem block size on
         // which the file resides.  we take care of any extra garbage written
