@@ -49,4 +49,4 @@ fastcp: $(fastcp_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 clean:
-	$(RM) $(PROGRAMS) $(alloc_empty_OBJS) $(cp_into_OBJS)
+	$(RM) $(PROGRAMS) $(alloc_empty_OBJS) $(cp_into_OBJS) $(fastcp_OBJS)
