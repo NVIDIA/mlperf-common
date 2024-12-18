@@ -218,32 +218,84 @@ readFileChunk(int fd,
             // expected case - done with loop!
             return readResult;
         }
+        assert (readResult < chunkSize);
 
         // noisy failure cases
-        assert (readResult < chunkSize);
         if (readResult == 0) {
-            std::cerr << "thread " << threadId
-                      << " got unexpected end-of-file while reading offset "
-                      << offset
-                      << std::endl;
+            // unexpected EOF
             return readResult;
         }
         if ((readResult < 0) && (errno != EINTR)) {
-            perror("failure during read");
-            std::cerr << "thread " << threadId
-                      << " got unexpected error while reading offset "
-                      << offset
-                      << std::endl
-                      << "read result is "
-                      << readResult
-                      << std::endl;
+            // error other than EINTR
             return readResult;
         }
 
-        // retry case
+        // retry cases (incomplete read, or EINTR)
         std::cerr << "thread " << threadId
                   << " got partial or interrupted read of size " << readResult
                   << " when trying to read offset " << offset
+                  << ": retrying"
+                  << std::endl;
+    } while (1);
+    return -1;
+}
+
+// much like pwrite()
+//
+// write up to chunkSize bytes from file descriptor fd at offset offset (from
+// the start of the file) into the buffer starting at buf.  The file offset is
+// not changed.
+//
+// on success, returns the number of bytes written
+//
+// This is intended for use with O_DIRECT, so write sizes are rounded up to the
+// next multiple of outputFSBlockSize.  (Truncate the file to the correct
+// length after finishing the writes).
+//
+// The extra argument threadId is just used to make the error reporting
+// clearer.
+off_t
+writeFileChunk(int fd,
+               void* buf,
+               off_t chunkSize,
+               off_t offset,
+               off_t outputFSBlockSize,
+               int threadId)
+{
+    assert(outputFSBlockSize > 0);
+    assert(chunkSize > 0);
+
+    // O_DIRECT write size for last block needs to be an exact multiple of the
+    // filesystem block size on which the file resides.  (We take care of any
+    // extra garbage written in the last block, by later using truncate to trim
+    // the file back to its correct size.)
+    off_t myWriteSize = roundUp(chunkSize, outputFSBlockSize);
+    // alignment requirements for ODIRECT writes:
+    assert(myWriteSize % outputFSBlockSize == 0);
+    assert(reinterpret_cast<intptr_t>(buf) % outputFSBlockSize == 0);
+    assert(offset % outputFSBlockSize == 0);
+    do {
+        off_t writeResult = pwrite(fd,
+                                   buf,
+                                   myWriteSize,      // size of read
+                                   offset);         // file offset
+
+        if (writeResult == myWriteSize) {
+            // expected case - done with loop!
+            return writeResult;
+        }
+        assert (writeResult < myWriteSize);
+
+        // noisy failure case:
+        if ((writeResult < 0) && (errno != EINTR)) {
+            // error other than EINTR
+            return writeResult;
+        }
+
+        // retry cases (incomplete write, or EINTR)
+        std::cerr << "thread " << threadId
+                  << " got partial or interrupted write of size " << writeResult
+                  << " when trying to write offset " << offset
                   << ": retrying"
                   << std::endl;
     } while (1);
@@ -274,114 +326,30 @@ worker(pile_type* pile,
                                         inputFSBlockSize,
                                         threadId);
         if (readResult != mySize) {
-            perror("failure calling readFileChunk()");
+            if (readResult == 0) {
+                perror("unexpected EOF from readFileChunk()");
+            } else {
+                perror("failure calling readFileChunk()");
+            }
             continue;
         }
-#if 0
-        assert (myOffset < fileSize);
-        off_t mySize = std::min(bufferSize, fileSize-myOffset);
-
-        assert (mySize > 0);
-        // O_DIRECT read size for last block needs to be very very specific: it
-        // needs to be an exact multiple of the filesystem block size on which
-        // the file resides, but it can't be more than a single block larger!
-        off_t myReadSize = roundUp(mySize, inputFSBlockSize);
-        if (mySize != bufferSize) {
-            std::cerr << "thread " << threadId
-                      << " is about to read the last (partial) block of the input file"
-                      << std::endl
-                      << "filesize is "
-                      << fileSize
-                      << std::endl
-                      << "myOffset is "
-                      << myOffset
-                      << std::endl
-                      << "mySize is "
-                      << mySize
-                      << std::endl
-                      << "read size is "
-                      << myReadSize
-                      << std::endl;
+        else {
+            // succesful read: now write the buffer to the output
+            off_t writeResult = writeFileChunk(outFD,
+                                               myBuf.get(),
+                                               mySize,
+                                               myOffset,
+                                               outputFSBlockSize,
+                                               threadId);
+            if (writeResult < mySize) {
+                if (writeResult >= 0) {
+                    perror("unexpected partial write from writeFileChunk()?");
+                } else {
+                    perror("failure calling writeFileChunk()");
+                }
+            }
         }
-        do {
-            off_t readResult = pread(inFD,
-                                     myBuf.get(), // buffer offset
-                                     myReadSize,      // size of read
-                                     myOffset);       // file offset
-
-            if (readResult == mySize) {
-                // expected case - done with loop!
-                break;
-            }
-
-            // noisy failure cases
-            assert (readResult < mySize);
-            if (readResult == 0) {
-                std::cerr << "thread " << threadId
-                           << " got unexpected end-of-file while reading offset "
-                           << myOffset
-                           << std::endl;
-                break;
-            }
-            if ((readResult < 0) && (errno != EINTR)) {
-                perror("failure during read");
-                std::cerr << "thread " << threadId
-                          << " got unexpected error while reading offset "
-                          << myOffset
-                          << std::endl
-                          << "read result is "
-                          << readResult
-                          << std::endl;
-                break;
-            }
-
-            // retry case
-            std::cerr << "thread " << threadId
-                      << " got partial or interrupted read of size " << readResult
-                      << " when trying to read offset " << myOffset
-                      << ": retrying"
-                      << std::endl;
-        } while (1);
-#endif
-        // O_DIRECT write size for last block needs to be very very specific:
-        // it needs to be an exact multiple of the filesystem block size on
-        // which the file resides.  we take care of any extra garbage written
-        // later by using truncate to trim the file back to its correct size
-        off_t myWriteSize = roundUp(mySize, outputFSBlockSize);
-        do {
-            off_t writeResult = pwrite(outFD,
-                                       myBuf.get(),
-                                       myWriteSize,
-                                       myOffset);
-            if (writeResult == myWriteSize) {
-                // expected case - done with loop!
-                break;
-            }
-
-            // noisy failure cases
-            assert (writeResult < mySize);
-            if ((writeResult < 0) && (errno != EINTR)) {
-                perror("failure during write");
-                std::cerr << "thread " << threadId
-                          << " got unexpected error while writing offset "
-                          << myOffset
-                          << std::endl
-                          << "write result is "
-                          << writeResult
-                          << std::endl;
-                break;
-            }
-
-            // retry case
-            std::cerr << "thread " << threadId
-                      << " got partial or interrupted write of size " << writeResult
-                      << " when trying to write offset " << myOffset
-                      << ": retrying"
-                      << std::endl;
-        } while (1);
-                
     }
-    
 }
 
 int
