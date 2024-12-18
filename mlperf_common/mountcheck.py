@@ -111,23 +111,24 @@ def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str])
 
     actual_rows_grouped = {}
     for actual in actual_rows:
-        key = (actual["key"], actual["type"], actual["relative_path"])
-        assert key not in actual_rows_grouped
-        actual_rows_grouped[key] = actual
+        row_id = (actual["key"], actual["type"], actual["relative_path"])
+        assert row_id not in actual_rows_grouped
+        actual_rows_grouped[row_id] = actual
 
     for expected in expected_rows:
-        key = (expected["key"], expected["type"], expected["relative_path"])
+        row_id = (expected["key"], expected["type"], expected["relative_path"])
 
-        if key not in actual_rows_grouped:
-            mount_prefix = mappings.get(expected["key"], None)
-            if mount_prefix is None:
-                print(f"mountcheck WARNING missing key:path mapping in --mounts_to_verify for key={repr(expected['key'])}\n", end="")
+        if row_id not in actual_rows_grouped:
+            mount_key = expected["key"]
+            mount_path = mappings.get(mount_key, None)
+            if mount_path is None:
+                print(f"mountcheck WARNING missing key:path mapping in --mounts_to_verify for key={repr(mount_key)}\n", end="")
             else:
-                missing_path = Path(mount_prefix) / Path(expected["relative_path"])
-                print(f"mountcheck WARNING missing {missing_path} does not exist!\n", end="")
+                missing_path = Path(mount_path) / Path(expected["relative_path"])
+                print(f"mountcheck WARNING {expected['type']} {missing_path} does not exist!\n", end="")
             continue
 
-        actual = actual_rows_grouped[key]
+        actual = actual_rows_grouped[row_id]
 
         if expected["type"] == "file":
             if expected["num_bytes"] == actual["num_bytes"]:
