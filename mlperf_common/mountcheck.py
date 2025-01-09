@@ -97,6 +97,11 @@ def inspect(mounts_to_verify: list[str]) -> list[dict]:
     return rows
 
 
+def print_check_info(message: str, verbosity: int, is_root_path: bool) -> None:
+    if verbosity == 2 or (verbosity == 1 and is_root_path):
+        print(message + "\n", end="")
+
+
 def initialize_expected_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str]) -> None:
     rows = inspect(mounts_to_verify)
     for row in rows:
@@ -104,7 +109,7 @@ def initialize_expected_mounts(expected_mounts_csv: Path, mounts_to_verify: list
     save_csv(rows, expected_mounts_csv)
 
 
-def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str]) -> None:
+def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str], verbosity: int) -> None:
     expected_rows = load_csv(expected_mounts_csv)
     actual_rows = inspect(mounts_to_verify)
     mappings = split(mounts_to_verify)
@@ -117,38 +122,61 @@ def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str])
 
     for expected in expected_rows:
         row_id = (expected["key"], expected["type"], expected["relative_path"])
+        is_root_path = expected["relative_path"] == "."
 
         if row_id not in actual_rows_grouped:
             mount_key = expected["key"]
             mount_path = mappings.get(mount_key, None)
             if mount_path is None:
-                print(f"mountcheck WARNING missing key:path mapping in --mounts_to_verify for key={repr(mount_key)}\n", end="")
+                print_check_info(
+                    f"mountcheck WARNING missing key:path mapping in --mounts_to_verify for key={repr(mount_key)}",
+                    verbosity,
+                    is_root_path,
+                )
             else:
                 missing_path = Path(mount_path) / Path(expected["relative_path"])
-                print(f"mountcheck WARNING {expected['type']} {missing_path} does not exist!\n", end="")
+                print_check_info(
+                    f"mountcheck WARNING {expected['type']} {missing_path} does not exist!",
+                    verbosity,
+                    is_root_path,
+                )
             continue
 
         actual = actual_rows_grouped[row_id]
 
-        if expected["type"] == "file":
-            if expected["num_bytes"] == actual["num_bytes"]:
-                print(f"mountcheck OK {actual['full_path']} {actual['num_bytes']}\n", end="")
-            else:
-                print(f"mountcheck WARNING {actual['full_path']} num bytes mismatch! expected={expected['num_bytes']} actual={actual['num_bytes']}\n", end="")
-        elif expected["type"] == "dir":
-            if expected["num_files"] == actual["num_files"]:
-                print(f"mountcheck OK {actual['full_path']} {actual['num_files']}")
-            else:
-                print(f"mountcheck WARNING {actual['full_path']} num files mismatch! expected={expected['num_files']} actual={actual['num_files']}\n", end="")
+        if expected["num_bytes"] == actual["num_bytes"]:
+            print_check_info(
+                f"mountcheck OK {actual['full_path']} {actual['num_bytes']} bytes",
+                verbosity,
+                is_root_path,
+            )
         else:
-            raise ValueError(f"unexpected file type: {repr(expected['type'])}\n", end="")
+            print_check_info(
+                f"mountcheck WARNING {actual['full_path']} num bytes mismatch! expected={expected['num_bytes']} actual={actual['num_bytes']}",
+                verbosity,
+                is_root_path,
+            )
+
+        if expected["type"] == "dir":
+            if expected["num_files"] == actual["num_files"]:
+                print_check_info(
+                    f"mountcheck OK {actual['full_path']} {actual['num_files']} files",
+                    verbosity,
+                    is_root_path,
+                )
+            else:
+                print_check_info(
+                    f"mountcheck WARNING {actual['full_path']} num files mismatch! expected={expected['num_files']} actual={actual['num_files']}",
+                    verbosity,
+                    is_root_path,
+                )
 
 
 def main(args: argparse.Namespace) -> None:
     if args.initialize:
         initialize_expected_mounts(args.expected_mounts_csv, args.mounts_to_verify)
     else:
-        verify_actual_mounts(args.expected_mounts_csv, args.mounts_to_verify)
+        verify_actual_mounts(args.expected_mounts_csv, args.mounts_to_verify, args.verbosity)
 
 
 if __name__ == "__main__":
@@ -159,8 +187,7 @@ if __name__ == "__main__":
         default="expected-mounts.csv",
         help="""
         CSV file with expected mounts.
-        Created when --initialize is passed.
-        Does not need to exist if --initialize is passed.
+        When --initialize is passed this file is created.
         """,
     )
     parser.add_argument(
@@ -170,7 +197,7 @@ if __name__ == "__main__":
         default=[],
         help="""
         Sequence of key:path mappings.
-        For example '--mounts_to_verify datadir:/path/to/data modeldir:/path/to/model file:/path/to/file'.
+        For example '--mounts_to_verify DATADIR:/path/to/data MODELDIR:/path/to/model FILE:/path/to/file'.
         Keys must be unique.
         Keys specified for initialization must later be passed during verification.
         """,
@@ -180,6 +207,17 @@ if __name__ == "__main__":
         action="store_true",
         help="""
         Whether to initialize expected_mounts_csv based on mounts_to_verify.
+        """,
+    )
+    parser.add_argument(
+        "--verbosity",
+        type=int,
+        default=1,
+        help="""
+        Verbosity level.
+        If 0, prints nothing.
+        If 1, prints root paths check info only.
+        If 2, prints everything.
         """,
     )
     main(args=parser.parse_args())
