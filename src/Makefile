@@ -18,10 +18,11 @@ prefix      ?= /usr/local
 exec_prefix ?= $(prefix)
 bindir      ?= $(exec_prefix)/bin
 
-PROGRAMS = alloc-empty-file-buffer cp-into
+PROGRAMS = alloc-empty-file-buffer cp-into fastcp
 
 alloc_empty_OBJS = alloc-empty-file-buffer.o cmdline.o
 cp_into_OBJS     = cp-into.o cmdline.o
+fastcp_OBJS      = fastcp.o cmdline.o
 
 LDFLAGS  = -s
 CXXFLAGS = -O3 -Wall
@@ -36,7 +37,7 @@ installdirs:
 install: all installdirs
 	install -t $(bindir) $(PROGRAMS)
 
-$(alloc_empty_OBJS) $(cp_into_OBJS): cmdline.h
+$(alloc_empty_OBJS) $(cp_into_OBJS) $(fastcp_OBJS): cmdline.h
 
 alloc-empty-file-buffer: $(alloc_empty_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -44,5 +45,8 @@ alloc-empty-file-buffer: $(alloc_empty_OBJS)
 cp-into: $(cp_into_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+fastcp: $(fastcp_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 clean:
-	$(RM) $(PROGRAMS) $(alloc_empty_OBJS) $(cp_into_OBJS)
+	$(RM) $(PROGRAMS) $(alloc_empty_OBJS) $(cp_into_OBJS) $(fastcp_OBJS)
