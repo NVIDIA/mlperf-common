@@ -83,7 +83,7 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
 def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
     """Perform a direct pwrite
 
-    REquired: `count <= aligned_memview size
+    Required: `count <= aligned_memview size
     """
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
     while True:
