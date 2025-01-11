@@ -205,35 +205,9 @@ def main():
 
     fastcp(args.src, args.dst, args.num_threads, args.buffer_size)
 
-def test_specific_case():
-    total_size = 2 * 1024 * 1024  # 2 MiB
-    alignment = 2 * 1024 * 1024  # 2 MiB
-
-    print(f"Testing allocate_aligned_buffer with total_size={total_size}, alignment={alignment}")
-
-    # Call the function
-    buf, aligned_address = allocate_aligned_buffer(total_size, alignment)
-
-    # Get the raw address of the buffer
-    raw_address = ctypes.addressof(buf)
-
-    # Calculate the offset
-    offset = (alignment - (raw_address % alignment)) % alignment
-
-    # Print details
-    print(f"Raw address: {raw_address:#x}")
-    print(f"Offset: {offset}")
-    print(f"Aligned address: {aligned_address:#x}")
-
-    # Validate the alignment
-    assert aligned_address % alignment == 0, "Aligned address is not properly aligned"
-    print("Test passed! The aligned address meets the alignment requirements.")
-
-# Run the test
 if __name__ == "__main__":
-#    test_specific_case()
-#    exit(1)
-
+    main()
+    exit(0)
     
     # Run a test harness when no arguments are provided
     with tempfile.NamedTemporaryFile(delete=False) as src_file:
