@@ -75,7 +75,7 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         return [row]
     elif path.is_dir():
         rows = []
-        for sub_path in path.glob("*"):
+        for sub_path in sorted(path.glob("*")):
             rows += scan(sub_path, key, root)
         row = {}
         row["key"] = key
