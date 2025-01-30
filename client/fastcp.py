@@ -4,10 +4,39 @@ import os
 import argparse
 import ctypes
 from ctypes import c_char, c_size_t, POINTER
-from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import ctypes
+from queue import Queue
+import threading
 
+def print_memoryview(mv):
+    address = ctypes.addressof(ctypes.c_char.from_buffer(mv))
+    size = mv.nbytes
+    print(f"Address: {hex(address)}, Size: {hex(size)}")
+
+def touch_memoryview_pages(memview):
+    """
+    Forces the allocation of memory for a memoryview by writing to each page.
+
+    Parameters:
+        memview (memoryview): The memoryview to be "touched".
+
+    Raises:
+        ValueError: If the memoryview is not writable.
+    """
+    if not memview.readonly:
+        # Get the system page size
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        buffer_size = len(memview)
+        # Cast to writable unsigned byte format if necessary
+        writable_view = memview.cast('B')
+        
+        # Touch each page by writing to it
+        for i in range(0, buffer_size, page_size):
+            writable_view[i] = 0  # Write to force allocation
+    else:
+        raise ValueError("The memoryview is readonly and cannot be touched.")
+    
 def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
     """
     Allocate a sequence of aligned buffers.
@@ -31,15 +60,18 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
     # Calculate the offset to align the first buffer
     first_offset = (alignment - (base_address % alignment)) % alignment
     aligned_base_address = base_address + first_offset
+    print(f"allocate_aligned_buffers: base_address {hex(base_address)}, aligned {hex(aligned_base_address)}")
     
     # Create memoryviews for each buffer
     buffers = []
     for i in range(num_bufs):
         buf_address = aligned_base_address + i * buffer_size
         aligned_buf = (ctypes.c_char * buffer_size).from_address(buf_address)
-        buffers.append(memoryview(aligned_buf))
+        mv = memoryview(aligned_buf)
+        print_memoryview(mv)
+        buffers.append(mv)
     
-    return buffers
+    return buffers, raw_buf
 
 def round_up(value, multiple):
     """Round up `value` to the next multiple of `multiple`."""
@@ -52,7 +84,14 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
 
     Required: `count` <= aligned_memview size
     """
+
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
+    address = ctypes.addressof(ctypes.c_char.from_buffer(aligned_memview))
+    size = aligned_memview.nbytes
+#    print(f"thread {thread_id}, Address: {hex(address)}, Size: {hex(size)}, offset: {hex(offset)}")
+    view2=aligned_memview[:padded_count]
+    address2 = ctypes.addressof(ctypes.c_char.from_buffer(view2))
+#    print(f"thread {thread_id}, Address2: {hex(address2)}, Size2: {hex(view2.nbytes)}, offset: {hex(offset)}")
     while True:
         try:
             bytes_read = os.preadv(fd, [aligned_memview[:padded_count]], offset)
@@ -78,6 +117,8 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
             continue
         except OSError as e:
             # Non-retriable errors
+            if e.errno == 14:  # Errno 14 corresponds to "Bad address"
+                raise RuntimeError(f"preadv failed with error: {e}, this usually means out of memory")
             raise RuntimeError(f"preadv failed with error: {e}")
 
 def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
@@ -111,15 +152,19 @@ def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
             continue
         except OSError as e:
             # Non-retriable errors
+            if e.errno == 14:  # Errno 14 corresponds to "Bad address"
+                raise RuntimeError(f"pwritev failed with error: {e}, this usually means out of memory")
             raise RuntimeError(f"pwritev failed with error: {e}")
 
 def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_size, thread_id):
     """Worker function to copy chunks from the workpile."""
+    # make sure the buffer actually got allocated
+#    touch_memoryview_pages(thread_buffer)
     while True:
         try:
             # Get the next chunk to copy.
-            offset, size = workpile.pop()
-        except IndexError:
+            offset, size = workpile.get_nowait()
+        except Exception:
             # Workpile is empty, so exit.
             return
 
@@ -130,6 +175,7 @@ def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_s
             pwrite_direct(fd_dst, thread_buffer, bytes_read, offset, fs_block_size)
             offset += bytes_read
             size -= bytes_read
+            workpile.task_done()
             
 
 def fastcp(src_path, dst_path, num_threads, buffer_size):
@@ -160,23 +206,25 @@ def fastcp(src_path, dst_path, num_threads, buffer_size):
 
             # get each thread an aligned buffer
             alignment = 2*1024*1024#max(fs_block_size, dst_block_size, 512)  # Ensure alignment meets O_DIRECT requirements
-            thread_buffers = allocate_aligned_buffers(buffer_size, alignment, num_threads)
+            thread_buffers, raw_buf = allocate_aligned_buffers(buffer_size, alignment, num_threads)
 
             # Create the workpile with all file chunks.
             chunk_size = buffer_size
-            workpile = [(offset, min(chunk_size, file_size - offset)) for offset in range(0, file_size, chunk_size)]
-            print(workpile)
+            workpile = Queue()
+            for offset in range(0, file_size, chunk_size):
+                workpile.put((offset, min(chunk_size, file_size - offset)))
+#            print(list(workpile.queue))
 
-            with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                # Start worker threads.
-                futures = [executor.submit(copy_worker, fd_src, fd_dst, buffer_size, workpile, thread_buffers[i], fs_block_size, i) for i in range(num_threads)]
+            # Start worker threads.
+            threads = []
+            for i in range(num_threads):
+                thread = threading.Thread(target=copy_worker, args=(fd_src, fd_dst, buffer_size, workpile, thread_buffers[i], fs_block_size, i))
+                threads.append(thread)
+                thread.start()
 
-                # Wait for all threads to complete.
-                for future in futures:
-                    try:
-                        future.result()
-                    except Exception as e:
-                        raise RuntimeError(f"Error in thread pool: {e}")
+            # Wait for all threads to finish.
+            for thread in threads:
+                thread.join()
 
             # Set the size of the destination file.
             os.ftruncate(fd_dst, file_size)
@@ -192,7 +240,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Threaded file copy utility.")
     parser.add_argument("src", help="Source file path")
     parser.add_argument("dst", help="Destination file path")
-    parser.add_argument("-n", "--num-threads", type=int, default=4, help="Number of threads (default: 4)")
+    parser.add_argument("-n", "--num-threads", type=int, default=64, help="Number of threads (default: 4)")
     parser.add_argument("-b", "--buffer-size", type=int, default=256 * 1024 * 1024, help="Buffer size in bytes (default: 256MB, must be a multiple of 2MiB)")
     return parser.parse_args()
 
@@ -242,4 +290,3 @@ if __name__ == "__main__":
         # Clean up temporary files
         os.unlink(src_path)
         os.unlink(dst_path)
-
