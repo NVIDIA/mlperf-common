@@ -14,32 +14,8 @@ def print_memoryview(mv):
     size = mv.nbytes
     print(f"Address: {hex(address)}, Size: {hex(size)}")
 
-def touch_memoryview_pages(memview):
-    """
-    Forces the allocation of memory for a memoryview by writing to each page.
-
-    Parameters:
-        memview (memoryview): The memoryview to be "touched".
-
-    Raises:
-        ValueError: If the memoryview is not writable.
-    """
-    if not memview.readonly:
-        # Get the system page size
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        buffer_size = len(memview)
-        # Cast to writable unsigned byte format if necessary
-        writable_view = memview.cast('B')
-        
-        # Touch each page by writing to it
-        for i in range(0, buffer_size, page_size):
-            writable_view[i] = 0  # Write to force allocation
-    else:
-        raise ValueError("The memoryview is readonly and cannot be touched.")
-    
 def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
-    """
-    Allocate a sequence of aligned buffers.
+    """Allocate a sequence of aligned buffers.
     
     Args:
         buffer_size (int): Size of each buffer in bytes.
@@ -47,7 +23,12 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
         num_bufs (int): Number of buffers to allocate.
     
     Returns:
-        list[memoryview]: A list of memoryview objects, each representing an aligned buffer.
+        list[memoryview]: A list of memoryview objects, each representing an
+        aligned buffer
+
+        raw_buf the ctypes raw string_buffer.  This *must* be kept to avoid the
+        gc prematurely collecting the buffers.
+
     """
     # Ensure buffer_size is a multiple of alignment
     assert buffer_size % alignment == 0, "buffer_size must be a multiple of alignment"
@@ -60,7 +41,7 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
     # Calculate the offset to align the first buffer
     first_offset = (alignment - (base_address % alignment)) % alignment
     aligned_base_address = base_address + first_offset
-    print(f"allocate_aligned_buffers: base_address {hex(base_address)}, aligned {hex(aligned_base_address)}")
+    # print(f"allocate_aligned_buffers: base_address {hex(base_address)}, aligned {hex(aligned_base_address)}")
     
     # Create memoryviews for each buffer
     buffers = []
@@ -68,7 +49,7 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
         buf_address = aligned_base_address + i * buffer_size
         aligned_buf = (ctypes.c_char * buffer_size).from_address(buf_address)
         mv = memoryview(aligned_buf)
-        print_memoryview(mv)
+        # print_memoryview(mv)
         buffers.append(mv)
     
     return buffers, raw_buf
@@ -80,18 +61,22 @@ def round_up(value, multiple):
     return ((value + multiple - 1) // multiple) * multiple
 
 def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
-    """Perform a direct pread
+    """Perform a direct pread.
+
+    Returns:
+        number of bytes read. Unlike Posix pread this routine handles
+        interrupts, so return value should always be equal to count unless
+        there is an unrecoverable error, in which case it throws rather than returns
 
     Required: `count` <= aligned_memview size
+
     """
 
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
-    address = ctypes.addressof(ctypes.c_char.from_buffer(aligned_memview))
-    size = aligned_memview.nbytes
-#    print(f"thread {thread_id}, Address: {hex(address)}, Size: {hex(size)}, offset: {hex(offset)}")
-    view2=aligned_memview[:padded_count]
-    address2 = ctypes.addressof(ctypes.c_char.from_buffer(view2))
-#    print(f"thread {thread_id}, Address2: {hex(address2)}, Size2: {hex(view2.nbytes)}, offset: {hex(offset)}")
+#    address = ctypes.addressof(ctypes.c_char.from_buffer(aligned_memview))
+    assert padded_count <= aligned_memview.nbytes, "memview too small for requested read"
+#    view2=aligned_memview[:padded_count]
+#    address2 = ctypes.addressof(ctypes.c_char.from_buffer(view2))
     while True:
         try:
             bytes_read = os.preadv(fd, [aligned_memview[:padded_count]], offset)
@@ -124,9 +109,17 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
 def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
     """Perform a direct pwrite
 
+    Returns:
+        number of bytes written. Unlike Posix pwrite this routine handles
+        interrupts, so return value should always be equal to count unless
+        there is an unrecoverable error, in which case it throws rather than
+        returns
+
     Required: `count <= aligned_memview size
+
     """
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
+    assert padded_count <= aligned_memview.nbytes, "memview too small for requested write"
     while True:
         try:
             bytes_written = os.pwritev(fd, [aligned_memview[:padded_count]], offset)
@@ -158,8 +151,6 @@ def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
 
 def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_size, thread_id):
     """Worker function to copy chunks from the workpile."""
-    # make sure the buffer actually got allocated
-#    touch_memoryview_pages(thread_buffer)
     while True:
         try:
             # Get the next chunk to copy.
@@ -168,14 +159,12 @@ def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_s
             # Workpile is empty, so exit.
             return
 
-        while size > 0:
-            bytes_read = pread_direct(fd_src, thread_buffer, size, offset, fs_block_size, thread_id)
-            if bytes_read <= 0:
-                break
-            pwrite_direct(fd_dst, thread_buffer, bytes_read, offset, fs_block_size)
-            offset += bytes_read
-            size -= bytes_read
-            workpile.task_done()
+        # pread_direct and pwrite_direct have their own retry loop so we don't need one here
+        bytes_read = pread_direct(fd_src, thread_buffer, size, offset, fs_block_size, thread_id)
+        assert bytes_read == size, "pread returned different size than requested"
+        bytes_written = pwrite_direct(fd_dst, thread_buffer, bytes_read, offset, fs_block_size)
+        assert bytes_written == size, "pwrite returned different size than requested"
+        workpile.task_done()
             
 
 def fastcp(src_path, dst_path, num_threads, buffer_size):
@@ -205,7 +194,10 @@ def fastcp(src_path, dst_path, num_threads, buffer_size):
             dst_block_size = os.fstatvfs(fd_dst).f_bsize
 
             # get each thread an aligned buffer
-            alignment = 2*1024*1024#max(fs_block_size, dst_block_size, 512)  # Ensure alignment meets O_DIRECT requirements
+            
+            alignment = 2*1024*1024 # 2M is the size of Linux Huge Pages, so this should always be enough
+            assert alignment >= max(fs_block_size, dst_block_size, 512), "alignment smaller than fs block size"
+
             thread_buffers, raw_buf = allocate_aligned_buffers(buffer_size, alignment, num_threads)
 
             # Create the workpile with all file chunks.
@@ -213,12 +205,13 @@ def fastcp(src_path, dst_path, num_threads, buffer_size):
             workpile = Queue()
             for offset in range(0, file_size, chunk_size):
                 workpile.put((offset, min(chunk_size, file_size - offset)))
-#            print(list(workpile.queue))
 
             # Start worker threads.
             threads = []
             for i in range(num_threads):
-                thread = threading.Thread(target=copy_worker, args=(fd_src, fd_dst, buffer_size, workpile, thread_buffers[i], fs_block_size, i))
+                thread = threading.Thread(target=copy_worker,
+                                          args=(fd_src, fd_dst, buffer_size, workpile,
+                                                thread_buffers[i], fs_block_size, i))
                 threads.append(thread)
                 thread.start()
 
