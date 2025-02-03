@@ -73,10 +73,8 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
     """
 
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
-#    address = ctypes.addressof(ctypes.c_char.from_buffer(aligned_memview))
     assert padded_count <= aligned_memview.nbytes, "memview too small for requested read"
-#    view2=aligned_memview[:padded_count]
-#    address2 = ctypes.addressof(ctypes.c_char.from_buffer(view2))
+
     while True:
         try:
             bytes_read = os.preadv(fd, [aligned_memview[:padded_count]], offset)
@@ -126,7 +124,9 @@ def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
 
             if bytes_written == padded_count:
                 # Expected case: all requested bytes were written.
-                return bytes_written
+                # in the case of the last block in the file we may have padded up, so return
+                # the bytes _requested_ rather than the padded count
+                return count
 
             if bytes_written > 0:
                 # Retry case: partial write, retry the entire write to maintain alignment restrictions
