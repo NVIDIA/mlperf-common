@@ -97,21 +97,47 @@ def inspect(mounts_to_verify: list[str]) -> list[dict]:
     return rows
 
 
+def filter_out(rows: list[dict], extensions_to_filter_out: list[str]) -> list[dict]:
+    if len(extensions_to_filter_out) == 0:
+        return rows
+    output = []
+    for row in rows:
+        keep = True
+        for ext in extensions_to_filter_out:
+            if row["relative_path"].endswith(ext):
+                keep = False
+                break
+        if keep:
+            output.append(row)
+    return output
+
+
 def print_check_info(message: str, verbosity: int, is_root_path: bool) -> None:
     if verbosity == 2 or (verbosity == 1 and is_root_path):
         print(message + "\n", end="")
 
 
-def initialize_expected_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str]) -> None:
+def initialize_expected_mounts(
+    expected_mounts_csv: Path,
+    mounts_to_verify: list[str],
+    extensions_to_filter_out: list[str],
+) -> None:
     rows = inspect(mounts_to_verify)
+    rows = filter_out(rows, extensions_to_filter_out)
     for row in rows:
         del row["full_path"]
     save_csv(rows, expected_mounts_csv)
 
 
-def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str], verbosity: int) -> None:
+def verify_actual_mounts(
+    expected_mounts_csv: Path,
+    mounts_to_verify: list[str],
+    extensions_to_filter_out: list[str],
+    verbosity: int,
+) -> None:
     expected_rows = load_csv(expected_mounts_csv)
     actual_rows = inspect(mounts_to_verify)
+    actual_rows = filter_out(actual_rows, extensions_to_filter_out)
     mappings = split(mounts_to_verify)
 
     actual_rows_grouped = {}
@@ -174,9 +200,18 @@ def verify_actual_mounts(expected_mounts_csv: Path, mounts_to_verify: list[str],
 
 def main(args: argparse.Namespace) -> None:
     if args.initialize:
-        initialize_expected_mounts(args.expected_mounts_csv, args.mounts_to_verify)
+        initialize_expected_mounts(
+            expected_mounts_csv=args.expected_mounts_csv,
+            mounts_to_verify=args.mounts_to_verify,
+            extensions_to_filter_out=args.extensions_to_filter_out,
+        )
     else:
-        verify_actual_mounts(args.expected_mounts_csv, args.mounts_to_verify, args.verbosity)
+        verify_actual_mounts(
+            expected_mounts_csv=args.expected_mounts_csv,
+            mounts_to_verify=args.mounts_to_verify,
+            extensions_to_filter_out=args.extensions_to_filter_out,
+            verbosity=args.verbosity,
+        )
 
 
 if __name__ == "__main__":
@@ -200,6 +235,20 @@ if __name__ == "__main__":
         For example '--mounts_to_verify DATADIR:/path/to/data MODELDIR:/path/to/model FILE:/path/to/file'.
         Keys must be unique.
         Keys specified for initialization must later be passed during verification.
+        """,
+    )
+    parser.add_argument(
+        "--extensions_to_filter_out",
+        type=str,
+        nargs="*",
+        default=[],
+        help="""
+        List of extensions to filter out.
+        If there are a large number of files with the same extension, you may want to count their number and total size,
+        but filter out individual files from the expected mounts CSV file.
+        This allows you to reduce the size of the expected mounts CSV file without compromising on functionality.
+        Parent directory will contain aggregated statistics about the filtered out files.
+        For example '--extensions_to_filter_out .jpg .jpeg .png'.
         """,
     )
     parser.add_argument(
