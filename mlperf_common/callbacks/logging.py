@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,26 +15,21 @@
 
 try:
     import lightning.pytorch as pl
+    from lightning.pytorch.loggers import Logger
     from lightning.pytorch.utilities import rank_zero_only
 except ImportError:
     import pytorch_lightning as pl
+    from pytorch_lightning.loggers import Logger
     from pytorch_lightning.utilities import rank_zero_only
 
 import os
 import time
+from typing import Any, Callable, Literal
 
 from mlperf_common.frameworks.pyt import PyTCommunicationHandler
 from mlperf_common.logging import MLLoggerWrapper
-from mlperf_logging.mllog import constants
 
-mllogger_instance = None
-
-
-def get_mllogger():
-    global mllogger_instance
-    if mllogger_instance is None:
-        mllogger_instance = MLLoggerWrapper(PyTCommunicationHandler())
-    return mllogger_instance
+mllogger = MLLoggerWrapper(PyTCommunicationHandler())
 
 
 class DeltaTimer:
@@ -60,20 +55,24 @@ class LoggingCallback(pl.Callback):
         self.train_current_block = 0
         self.train_block_started = False
 
-        self.mllogger = get_mllogger()
         self.timer = DeltaTimer()
         self.previous_step = 0
+        self.mllogger = mllogger
 
-    def on_train_start(
+    def on_train_epoch_start(
         self,
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
+        if not hasattr(trainer, "warmup") or trainer.warmup:
+            self.warmup(trainer, pl_module)
+            trainer.warmup = False
+
         if not self.train_block_started:
-            self.mllogger.log_init_stop_run_start()
+            mllogger.log_init_stop_run_start()
             self._start_train_block(
                 trainer.global_step,
-                trainer.train_dataloader.batch_sampler.global_batch_size,
+                self.get_train_step_samples_count(trainer, pl_module),
             )
             self.timer.reset()
 
@@ -83,12 +82,20 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         if hasattr(trainer, "run_stop_logged") and not trainer.run_stop_logged:
-            train_batch_size = trainer.train_dataloader.batch_sampler.global_batch_size
-            self.mllogger.end(
-                constants.RUN_STOP,
+            train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
+            if (
+                hasattr(trainer, "target_reached") and trainer.target_reached
+            ) or self.force_success:
+                status = mllogger.constants.SUCCESS
+            else:
+                status = mllogger.constants.ABORTED
+
+            mllogger.end(
+                mllogger.constants.RUN_STOP,
                 metadata={
-                    "samples_count": self.train_current_block * train_batch_size,
-                    "status": "aborted" if not self.force_success else "success",
+                    mllogger.constants.SAMPLES_COUNT: self.train_current_block
+                    * train_batch_size,
+                    "status": status,
                 },
             )
 
@@ -98,7 +105,7 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         if not trainer.warmup:
-            train_batch_size = trainer.train_dataloader.batch_sampler.global_batch_size
+            train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
             self._log_training_throughput(
                 trainer.global_step,
                 train_batch_size,
@@ -107,9 +114,12 @@ class LoggingCallback(pl.Callback):
             if self.train_block_started:
                 self._end_train_block(train_batch_size)
 
-            self.mllogger.start(
-                constants.EVAL_START,
-                metadata={"step": self.train_current_block * train_batch_size},
+            mllogger.start(
+                mllogger.constants.EVAL_START,
+                metadata={
+                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
+                    * train_batch_size
+                },
             )
 
     def on_validation_end(
@@ -118,11 +128,8 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         if not trainer.warmup:
-            train_batch_size = trainer.train_dataloader.batch_sampler.global_batch_size
-            validation_samples = (
-                trainer.val_dataloaders.batch_sampler.global_batch_size
-                * len(trainer.val_dataloaders)
-            )
+            train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
+            validation_samples = self.get_validation_samples_count(trainer, pl_module)
 
             self._log_validation_throughput(
                 trainer.global_step,
@@ -130,9 +137,12 @@ class LoggingCallback(pl.Callback):
                 validation_samples,
             )
 
-            self.mllogger.end(
-                constants.EVAL_STOP,
-                metadata={"step": self.train_current_block * train_batch_size},
+            mllogger.end(
+                mllogger.constants.EVAL_STOP,
+                metadata={
+                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
+                    * train_batch_size
+                },
             )
 
             if not trainer.should_stop:
@@ -141,21 +151,53 @@ class LoggingCallback(pl.Callback):
                     train_batch_size,
                 )
 
+    def log_custom_timedelta(self, value_key, step: int = 0):
+        mllogger.event(
+            key="tracked_stats",
+            metadata={mllogger.constants.SAMPLES_COUNT: step},
+            value={value_key: self.timer.get_delta()},
+        )
+
+    def warmup(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        pass
+
+    def get_train_step_samples_count(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> int:
+        return trainer.train_dataloader.batch_sampler.global_batch_size
+
+    def get_validation_samples_count(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+    ) -> int:
+        return trainer.val_dataloaders.batch_sampler.global_batch_size * len(
+            trainer.val_dataloaders
+        )
+
     def __deepcopy__(self, memo):
         return LoggingCallback(self.force_success)
 
     def _start_train_block(self, trainer_step: int, train_batch_size: int) -> None:
         self.train_block_started = True
         self.train_current_block = trainer_step
-        self.mllogger.start(
-            constants.BLOCK_START,
-            metadata={"step": self.train_current_block * train_batch_size},
+        mllogger.start(
+            mllogger.constants.BLOCK_START,
+            metadata={
+                mllogger.constants.SAMPLES_COUNT: self.train_current_block
+                * train_batch_size
+            },
         )
 
     def _end_train_block(self, train_batch_size: int) -> None:
-        self.mllogger.end(
-            constants.BLOCK_STOP,
-            metadata={"step": self.train_current_block * train_batch_size},
+        mllogger.end(
+            mllogger.constants.BLOCK_STOP,
+            metadata={
+                mllogger.constants.SAMPLES_COUNT: self.train_current_block
+                * train_batch_size
+            },
         )
         self.train_block_started = False
 
@@ -166,9 +208,12 @@ class LoggingCallback(pl.Callback):
     ) -> None:
         delta_t = self.timer.get_delta()
         throughput = ((trainer_step - self.previous_step) * train_batch_size) / delta_t
-        self.mllogger.event(
+        mllogger.event(
             key="tracked_stats",
-            metadata={"step": trainer_step * train_batch_size},
+            metadata={
+                mllogger.constants.SAMPLES_COUNT: self.train_current_block
+                * train_batch_size
+            },
             value={
                 "throughput": throughput,
                 "train_step_time": delta_t / (trainer_step - self.previous_step),
@@ -185,8 +230,116 @@ class LoggingCallback(pl.Callback):
     ) -> None:
         delta_t = self.timer.get_delta()
         throughput = (validation_samples) / delta_t
-        self.mllogger.event(
+        mllogger.event(
             key="tracked_stats",
-            metadata={"step": trainer_step * train_batch_size},
+            metadata={
+                mllogger.constants.SAMPLES_COUNT: trainer_step * train_batch_size
+            },
             value={"validation_throughput": throughput},
         )
+
+
+class MLPerfLogger(Logger):
+    def __init__(
+        self,
+        callback_cls: type[LoggingCallback],
+        model: pl.LightningModule,
+        validation_metric: str,
+        target_validation_metric: float,
+        target_validation_metric_type: Literal["min", "max"],
+        *args,
+        **kwargs,
+    ):
+        super().__init__()
+
+        self.trainer = None
+        self.model = model
+        self.validation_metric = validation_metric
+        self.target_validation_metric = target_validation_metric
+        self.target_validation_metric_type = target_validation_metric_type
+
+        self.custom_callback = self._build_custom_callback(
+            callback_cls, *args, **kwargs
+        )
+        self.callback_arguments = (args, kwargs)
+        self.mllogger = mllogger
+
+    def __deepcopy__(self, memo):
+        output = MLPerfLogger(
+            self.callback_cls,
+            self.model,
+            self.validation_metric,
+            self.target_validation_metric,
+            self.target_validation_metric_type,  # type: ignore
+            *self.callback_arguments[0],
+            **self.callback_arguments[1],
+        )
+
+        output.trainer = self.trainer
+        return output
+
+    def set_trainer(self, trainer: pl.Trainer):
+        self.trainer = trainer
+        trainer.run_stop_logged = False
+
+    def log_metrics(
+        self,
+        metrics: dict[str, float],
+        step: int | None = None,
+    ) -> None:
+        if self.validation_metric in metrics:
+            computed_metric = self.compute_validation_metric(metrics)
+            mllogger.event(
+                key=mllogger.constants.EVAL_ACCURACY,
+                metadata={
+                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step
+                    * self.custom_callback.get_train_step_samples_count(
+                        self.trainer, self.model
+                    )
+                },
+                value=computed_metric,
+            )
+
+            if (
+                self.target_validation_metric_type == "min"
+                and computed_metric <= self.target_validation_metric
+            ) or (
+                self.target_validation_metric_type == "max"
+                and computed_metric >= self.target_validation_metric
+            ):
+                if self.trainer is not None:
+                    self.trainer.should_stop = True
+                    self.trainer.target_reached = True
+
+    @rank_zero_only
+    def log_hyperparams(self, params: dict[str, Any] | None = None, *args, **kwargs):
+        for key, value in self.compute_hyperparams(params, *args, **kwargs).items():
+            mllogger.event(key=key, value=value, sync=False)
+
+    def compute_validation_metric(self, metrics: dict[str, float]) -> float:
+        return metrics[self.validation_metric]
+
+    def compute_hyperparams(
+        self, params: dict[str, Any] | None, *args, **kwargs
+    ) -> dict[str, Any]:
+        return {}
+
+    @property
+    def name(self) -> str:
+        return "mlperf-metrics"
+
+    @property
+    def version(self) -> str:
+        return "1.0"
+
+    @property
+    def callback(self) -> LoggingCallback:
+        return self.custom_callback
+
+    def _build_custom_callback(
+        self,
+        cls: type[LoggingCallback],
+        *args,
+        **kwargs,
+    ) -> LoggingCallback:
+        return cls(*args, **kwargs)
