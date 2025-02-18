@@ -81,6 +81,9 @@ class LoggingCallback(pl.Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
     ) -> None:
+        if self.train_block_started:
+            self._end_train_block(self.get_train_step_samples_count(trainer, pl_module))
+
         if hasattr(trainer, "run_stop_logged") and not trainer.run_stop_logged:
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
             if (
@@ -261,6 +264,7 @@ class MLPerfLogger(Logger):
         self.custom_callback = self._build_custom_callback(
             callback_cls, *args, **kwargs
         )
+
         self.callback_arguments = (args, kwargs)
         self.mllogger = mllogger
 
@@ -308,8 +312,8 @@ class MLPerfLogger(Logger):
                 and computed_metric >= self.target_validation_metric
             ):
                 if self.trainer is not None:
-                    self.trainer.should_stop = True
                     self.trainer.target_reached = True
+                    self.trainer.should_stop = True
 
     @rank_zero_only
     def log_hyperparams(self, params: dict[str, Any] | None = None, *args, **kwargs):
