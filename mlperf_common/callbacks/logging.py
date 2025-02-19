@@ -157,7 +157,7 @@ class LoggingCallback(pl.Callback):
     def log_custom_timedelta(self, value_key, step: int = 0):
         mllogger.event(
             key="tracked_stats",
-            metadata={mllogger.constants.SAMPLES_COUNT: step},
+            metadata={"step": step},
             value={value_key: self.timer.get_delta()},
         )
 
@@ -213,10 +213,7 @@ class LoggingCallback(pl.Callback):
         throughput = ((trainer_step - self.previous_step) * train_batch_size) / delta_t
         mllogger.event(
             key="tracked_stats",
-            metadata={
-                mllogger.constants.SAMPLES_COUNT: self.train_current_block
-                * train_batch_size
-            },
+            metadata={"step": self.train_current_block * train_batch_size},
             value={
                 "throughput": throughput,
                 "train_step_time": delta_t / (trainer_step - self.previous_step),
@@ -235,9 +232,7 @@ class LoggingCallback(pl.Callback):
         throughput = (validation_samples) / delta_t
         mllogger.event(
             key="tracked_stats",
-            metadata={
-                mllogger.constants.SAMPLES_COUNT: trainer_step * train_batch_size
-            },
+            metadata={"step": trainer_step * train_batch_size},
             value={"validation_throughput": throughput},
         )
 
