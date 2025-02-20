@@ -12,15 +12,16 @@ fi
 
 SIZE_THRESHOLD_MB=$1
 shift
-HEAD_SIZE=$((SIZE_THRESHOLD_MB * 9/10 * 1024 * 1024))
-TAIL_SIZE=$((SIZE_THRESHOLD_MB * 1/10 * 1024 * 1024))
+SIZE_IN_BYTES=$((SIZE_THRESHOLD_MB * 1024 * 1024))
+HEAD_SIZE=$(( SIZE_IN_BYTES * 9 / 10 ))
+TAIL_SIZE=$(( SIZE_IN_BYTES * 1 / 10 ))
 
 for log_file in "$@"; do
-    if [ ! -f ${log_file} ]; then
+    if [[ ! -f "${log_file}" ]]; then
         continue
     fi
     
-    LOG_SIZE_MB=$(du -m ${log_file} 2>/dev/null | cut -f1 || echo 0)
+    LOG_SIZE_MB=$(( $(stat -c %s "${log_file}" 2>/dev/null) / 1024 / 1024 ))
     
     if [ ${LOG_SIZE_MB} -gt ${SIZE_THRESHOLD_MB} ]; then
         # Save original file
@@ -35,4 +36,4 @@ for log_file in "$@"; do
          echo ${MESSAGE}; 
          tail -c ${TAIL_SIZE} ${log_file}.original) > ${log_file}
     fi
-done 
+done
