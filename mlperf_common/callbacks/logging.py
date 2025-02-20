@@ -210,13 +210,14 @@ class LoggingCallback(pl.Callback):
         train_batch_size: int,
     ) -> None:
         delta_t = self.timer.get_delta()
-        throughput = ((trainer_step - self.previous_step) * train_batch_size) / delta_t
+        delta_step = trainer_step - self.previous_step
+        throughput = (delta_step * train_batch_size) / delta_t
         mllogger.event(
             key="tracked_stats",
             metadata={"step": self.train_current_block * train_batch_size},
             value={
                 "throughput": throughput,
-                "train_step_time": delta_t / (trainer_step - self.previous_step),
+                "train_step_time": delta_t / delta_step,
             },
         )
 
