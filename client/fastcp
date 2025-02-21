@@ -247,16 +247,17 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Threaded file copy utility.")
     parser.add_argument("src", help="Source file path")
     parser.add_argument("dst", help="Destination file path")
-    parser.add_argument("-n", "--num-threads", type=int, default=64, help="Number of threads (default: 4)")
-    parser.add_argument("-b", "--buffer-size", type=int, default=256 * 1024 * 1024, help="Buffer size in bytes (default: 256MB, must be a multiple of 2MiB)")
+    parser.add_argument("-n", "--num-threads", type=int, default=16, help="Number of threads (default: 16)")
+    parser.add_argument("-b", "--buffer-size", type=int, default=256 * 1024 * 1024, help="Buffer size in bytes (default: 256MiB, must be a multiple of 2MiB)")
     return parser.parse_args()
 
 def main():
     args = parse_arguments()
 
-    # Check that buffer_size is a multiple of 2 MiB
+    # round buffer size up to next multiple of 2 MiB
     if args.buffer_size % (2 * 1024 * 1024) != 0:
-        raise ValueError("Buffer size must be a multiple of 2 MiB.")
+        args.buffer_size = round_up(args.buffer_size, 2 * 1024 * 1024)
+        print(f"rounding buffer size up to {args.buffer_size} ({args.buffer_size/(1024*1024)} MiB)")
 
     fastcp(args.src, args.dst, args.num_threads, args.buffer_size)
 
@@ -267,7 +268,6 @@ if __name__ == "__main__":
     # Run a test harness when no arguments are provided
     with tempfile.NamedTemporaryFile(delete=False) as src_file:
         src_file.write(os.urandom(16000123))  # Generate a random source file
-#        src_file.write(os.urandom(2*1024*1024))  # Generate a random source file
         src_path = src_file.name
 
     with tempfile.NamedTemporaryFile(delete=False) as dst_file:
