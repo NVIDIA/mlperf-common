@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
 
+# Copyright (c) 2024-2025, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import argparse
 import ctypes
 from ctypes import c_char, c_size_t, POINTER
-from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import ctypes
+from queue import Queue
+import threading
+
+def print_memoryview(mv):
+    address = ctypes.addressof(ctypes.c_char.from_buffer(mv))
+    size = mv.nbytes
+    print(f"Address: {hex(address)}, Size: {hex(size)}")
 
 def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
-    """
-    Allocate a sequence of aligned buffers.
+    """Allocate a sequence of aligned buffers.
     
     Args:
         buffer_size (int): Size of each buffer in bytes.
@@ -18,7 +37,12 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
         num_bufs (int): Number of buffers to allocate.
     
     Returns:
-        list[memoryview]: A list of memoryview objects, each representing an aligned buffer.
+        list[memoryview]: A list of memoryview objects, each representing an
+        aligned buffer
+
+        raw_buf the ctypes raw string_buffer.  This *must* be kept to avoid the
+        gc prematurely collecting the buffers.
+
     """
     # Ensure buffer_size is a multiple of alignment
     assert buffer_size % alignment == 0, "buffer_size must be a multiple of alignment"
@@ -31,15 +55,18 @@ def allocate_aligned_buffers(buffer_size, alignment, num_bufs):
     # Calculate the offset to align the first buffer
     first_offset = (alignment - (base_address % alignment)) % alignment
     aligned_base_address = base_address + first_offset
+    # print(f"allocate_aligned_buffers: base_address {hex(base_address)}, aligned {hex(aligned_base_address)}")
     
     # Create memoryviews for each buffer
     buffers = []
     for i in range(num_bufs):
         buf_address = aligned_base_address + i * buffer_size
         aligned_buf = (ctypes.c_char * buffer_size).from_address(buf_address)
-        buffers.append(memoryview(aligned_buf))
+        mv = memoryview(aligned_buf)
+        # print_memoryview(mv)
+        buffers.append(mv)
     
-    return buffers
+    return buffers, raw_buf
 
 def round_up(value, multiple):
     """Round up `value` to the next multiple of `multiple`."""
@@ -48,11 +75,20 @@ def round_up(value, multiple):
     return ((value + multiple - 1) // multiple) * multiple
 
 def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
-    """Perform a direct pread
+    """Perform a direct pread.
+
+    Returns:
+        number of bytes read. Unlike Posix pread this routine handles
+        interrupts, so return value should always be equal to count unless
+        there is an unrecoverable error, in which case it throws rather than returns
 
     Required: `count` <= aligned_memview size
+
     """
+
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
+    assert padded_count <= aligned_memview.nbytes, "memview too small for requested read"
+
     while True:
         try:
             bytes_read = os.preadv(fd, [aligned_memview[:padded_count]], offset)
@@ -78,21 +114,33 @@ def pread_direct(fd, aligned_memview, count, offset, fs_block_size, thread_id):
             continue
         except OSError as e:
             # Non-retriable errors
+            if e.errno == 14:  # Errno 14 corresponds to "Bad address"
+                raise RuntimeError(f"preadv failed with error: {e}, this usually means out of memory")
             raise RuntimeError(f"preadv failed with error: {e}")
 
 def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
     """Perform a direct pwrite
 
-    REquired: `count <= aligned_memview size
+    Returns:
+        number of bytes written. Unlike Posix pwrite this routine handles
+        interrupts, so return value should always be equal to count unless
+        there is an unrecoverable error, in which case it throws rather than
+        returns
+
+    Required: `count <= aligned_memview size
+
     """
     padded_count = round_up(count, fs_block_size)  # Ensure count is a multiple of fs_block_size
+    assert padded_count <= aligned_memview.nbytes, "memview too small for requested write"
     while True:
         try:
             bytes_written = os.pwritev(fd, [aligned_memview[:padded_count]], offset)
 
             if bytes_written == padded_count:
                 # Expected case: all requested bytes were written.
-                return bytes_written
+                # in the case of the last block in the file we may have padded up, so return
+                # the bytes _requested_ rather than the padded count
+                return count
 
             if bytes_written > 0:
                 # Retry case: partial write, retry the entire write to maintain alignment restrictions
@@ -111,6 +159,8 @@ def pwrite_direct(fd, aligned_memview, count, offset, fs_block_size):
             continue
         except OSError as e:
             # Non-retriable errors
+            if e.errno == 14:  # Errno 14 corresponds to "Bad address"
+                raise RuntimeError(f"pwritev failed with error: {e}, this usually means out of memory")
             raise RuntimeError(f"pwritev failed with error: {e}")
 
 def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_size, thread_id):
@@ -118,18 +168,17 @@ def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_s
     while True:
         try:
             # Get the next chunk to copy.
-            offset, size = workpile.pop()
-        except IndexError:
+            offset, size = workpile.get_nowait()
+        except Exception:
             # Workpile is empty, so exit.
             return
 
-        while size > 0:
-            bytes_read = pread_direct(fd_src, thread_buffer, size, offset, fs_block_size, thread_id)
-            if bytes_read <= 0:
-                break
-            pwrite_direct(fd_dst, thread_buffer, bytes_read, offset, fs_block_size)
-            offset += bytes_read
-            size -= bytes_read
+        # pread_direct and pwrite_direct have their own retry loop so we don't need one here
+        bytes_read = pread_direct(fd_src, thread_buffer, size, offset, fs_block_size, thread_id)
+        assert bytes_read == size, "pread returned different size than requested"
+        bytes_written = pwrite_direct(fd_dst, thread_buffer, bytes_read, offset, fs_block_size)
+        assert bytes_written == size, "pwrite returned different size than requested"
+        workpile.task_done()
             
 
 def fastcp(src_path, dst_path, num_threads, buffer_size):
@@ -159,24 +208,30 @@ def fastcp(src_path, dst_path, num_threads, buffer_size):
             dst_block_size = os.fstatvfs(fd_dst).f_bsize
 
             # get each thread an aligned buffer
-            alignment = 2*1024*1024#max(fs_block_size, dst_block_size, 512)  # Ensure alignment meets O_DIRECT requirements
-            thread_buffers = allocate_aligned_buffers(buffer_size, alignment, num_threads)
+            
+            alignment = 2*1024*1024 # 2M is the size of Linux Huge Pages, so this should always be enough
+            assert alignment >= max(fs_block_size, dst_block_size, 512), "alignment smaller than fs block size"
+
+            thread_buffers, raw_buf = allocate_aligned_buffers(buffer_size, alignment, num_threads)
 
             # Create the workpile with all file chunks.
             chunk_size = buffer_size
-            workpile = [(offset, min(chunk_size, file_size - offset)) for offset in range(0, file_size, chunk_size)]
-            print(workpile)
+            workpile = Queue()
+            for offset in range(0, file_size, chunk_size):
+                workpile.put((offset, min(chunk_size, file_size - offset)))
 
-            with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                # Start worker threads.
-                futures = [executor.submit(copy_worker, fd_src, fd_dst, buffer_size, workpile, thread_buffers[i], fs_block_size, i) for i in range(num_threads)]
+            # Start worker threads.
+            threads = []
+            for i in range(num_threads):
+                thread = threading.Thread(target=copy_worker,
+                                          args=(fd_src, fd_dst, buffer_size, workpile,
+                                                thread_buffers[i], fs_block_size, i))
+                threads.append(thread)
+                thread.start()
 
-                # Wait for all threads to complete.
-                for future in futures:
-                    try:
-                        future.result()
-                    except Exception as e:
-                        raise RuntimeError(f"Error in thread pool: {e}")
+            # Wait for all threads to finish.
+            for thread in threads:
+                thread.join()
 
             # Set the size of the destination file.
             os.ftruncate(fd_dst, file_size)
@@ -192,53 +247,27 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Threaded file copy utility.")
     parser.add_argument("src", help="Source file path")
     parser.add_argument("dst", help="Destination file path")
-    parser.add_argument("-n", "--num-threads", type=int, default=4, help="Number of threads (default: 4)")
-    parser.add_argument("-b", "--buffer-size", type=int, default=256 * 1024 * 1024, help="Buffer size in bytes (default: 256MB, must be a multiple of 2MiB)")
+    parser.add_argument("-n", "--num-threads", type=int, default=16, help="Number of threads (default: 16)")
+    parser.add_argument("-b", "--buffer-size", type=int, default=256 * 1024 * 1024, help="Buffer size in bytes (default: 256MiB, must be a multiple of 2MiB)")
     return parser.parse_args()
 
 def main():
     args = parse_arguments()
 
-    # Check that buffer_size is a multiple of 2 MiB
+    # round buffer size up to next multiple of 2 MiB
     if args.buffer_size % (2 * 1024 * 1024) != 0:
-        raise ValueError("Buffer size must be a multiple of 2 MiB.")
+        args.buffer_size = round_up(args.buffer_size, 2 * 1024 * 1024)
+        print(f"rounding buffer size up to {args.buffer_size} ({args.buffer_size/(1024*1024)} MiB)")
 
     fastcp(args.src, args.dst, args.num_threads, args.buffer_size)
 
-def test_specific_case():
-    total_size = 2 * 1024 * 1024  # 2 MiB
-    alignment = 2 * 1024 * 1024  # 2 MiB
-
-    print(f"Testing allocate_aligned_buffer with total_size={total_size}, alignment={alignment}")
-
-    # Call the function
-    buf, aligned_address = allocate_aligned_buffer(total_size, alignment)
-
-    # Get the raw address of the buffer
-    raw_address = ctypes.addressof(buf)
-
-    # Calculate the offset
-    offset = (alignment - (raw_address % alignment)) % alignment
-
-    # Print details
-    print(f"Raw address: {raw_address:#x}")
-    print(f"Offset: {offset}")
-    print(f"Aligned address: {aligned_address:#x}")
-
-    # Validate the alignment
-    assert aligned_address % alignment == 0, "Aligned address is not properly aligned"
-    print("Test passed! The aligned address meets the alignment requirements.")
-
-# Run the test
 if __name__ == "__main__":
-#    test_specific_case()
-#    exit(1)
-
+    main()
+    exit(0)
     
     # Run a test harness when no arguments are provided
     with tempfile.NamedTemporaryFile(delete=False) as src_file:
         src_file.write(os.urandom(16000123))  # Generate a random source file
-#        src_file.write(os.urandom(2*1024*1024))  # Generate a random source file
         src_path = src_file.name
 
     with tempfile.NamedTemporaryFile(delete=False) as dst_file:
@@ -268,4 +297,3 @@ if __name__ == "__main__":
         # Clean up temporary files
         os.unlink(src_path)
         os.unlink(dst_path)
-
