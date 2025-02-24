@@ -67,14 +67,15 @@ class LoggingCallback(pl.Callback):
         if not hasattr(trainer, "warmup") or trainer.warmup:
             self.warmup(trainer, pl_module)
             trainer.warmup = False
+            self.log_custom_timedelta("warmup_time", trainer.global_step)
 
         if not self.train_block_started:
+            self.log_custom_timedelta("init_finished", trainer.global_step)
             mllogger.log_init_stop_run_start()
             self._start_train_block(
                 trainer.global_step,
                 self.get_train_step_samples_count(trainer, pl_module),
             )
-            self.timer.reset()
 
     def on_train_end(
         self,
