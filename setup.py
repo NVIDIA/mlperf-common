@@ -30,7 +30,7 @@ setup(
     long_description_content_type="text/markdown",
     name="mlperf-common",
     packages=find_packages(where="."),
-    scripts=['client/bindpcie','client/slurm2pytorch','client/mgpurun','client/mlperf-sysjson.sh','client/fastcp'],
+    scripts=['client/bindpcie','client/slurm2pytorch','client/mgpurun','client/mlperf-sysjson.sh','client/fastcp', 'client/truncate_log.sh'],
     url="https://github.com/NVIDIA/mlperf-common",
     version="0.3",
 )
