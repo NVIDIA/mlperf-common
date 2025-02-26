@@ -25,6 +25,7 @@ except ImportError:
 import os
 import time
 from typing import Any, Callable, Literal
+import torch
 
 from mlperf_common.frameworks.pyt import PyTCommunicationHandler
 from mlperf_common.logging import MLLoggerWrapper
@@ -219,6 +220,7 @@ class LoggingCallback(pl.Callback):
             value={
                 "throughput": throughput,
                 "train_step_time": delta_t / delta_step,
+                "max_memory_usage": torch.cuda.max_memory_allocated()
             },
         )
 
