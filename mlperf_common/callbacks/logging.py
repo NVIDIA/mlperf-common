@@ -220,7 +220,7 @@ class LoggingCallback(pl.Callback):
             value={
                 "throughput": throughput,
                 "train_step_time": delta_t / delta_step,
-                "max_memory_usage": torch.cuda.max_memory_allocated()
+                "max_memory_usage": round(torch.cuda.max_memory_allocated() / (1024*1024*1024), 3)
             },
         )
 
