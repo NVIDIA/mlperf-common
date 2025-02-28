@@ -59,6 +59,7 @@ class LoggingCallback(pl.Callback):
         self.timer = DeltaTimer()
         self.previous_step = 0
         self.mllogger = mllogger
+        self.init_global_step = 0
 
     def on_train_epoch_start(
         self,
@@ -145,8 +146,7 @@ class LoggingCallback(pl.Callback):
             mllogger.end(
                 mllogger.constants.EVAL_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
-                    * train_batch_size
+                    mllogger.constants.SAMPLES_COUNT: (trainer.global_step - self.init_global_step) * train_batch_size
                 },
             )
 
@@ -284,6 +284,7 @@ class MLPerfLogger(Logger):
     def set_trainer(self, trainer: pl.Trainer):
         self.trainer = trainer
         trainer.run_stop_logged = False
+        self.custom_callback.init_global_step = trainer.global_step
 
     def log_metrics(
         self,
