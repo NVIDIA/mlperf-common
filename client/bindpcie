@@ -88,7 +88,7 @@ get_lscpu_value() {
 }
 lscpu_out=$(lscpu)
 num_sockets=$(get_lscpu_value 'Socket(s)' <<< "${lscpu_out}")
-num_nodes=$(get_lscpu_value 'NUMA node(s)' <<< "${lscpu_out}")
+num_nodes=$(lscpu --parse | grep -v '^#' | cut -f4 -d, | sort --unique | wc --lines)
 cores_per_socket=$(get_lscpu_value 'Core(s) per socket' <<< "${lscpu_out}")
 
 echo "num_gpus=${num_gpus} num_sockets = ${num_sockets} num_nodes=${num_nodes} cores_per_socket=${cores_per_socket}"
