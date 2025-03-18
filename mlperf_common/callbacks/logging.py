@@ -98,7 +98,7 @@ class LoggingCallback(pl.Callback):
             mllogger.end(
                 mllogger.constants.RUN_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: self.train_current_block
+                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
                     * train_batch_size,
                     "status": status,
                 },
