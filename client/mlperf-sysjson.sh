@@ -154,9 +154,10 @@ esac
 
 # if caller defines MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES we construct a
 # more interesting system name for multi-node systems
-if [[ "${MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES:-0}" -eq 1 ]] && ((MLPERF_NUM_NODES > 1)); then
-    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME}_n${MLPERF_NUM_NODES}"
+if [[ "${MLPERF_SYSTEM_NAME}" != "UNKNOWN_MLPERF_SYSTEM_NAME" ]]; then
+    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME/MLPERF_SYS_SIZE/${MLPERF_NUM_NODES}x}"
 fi
+
 
 # variables we derive from the NVIDIA container
 : "${NVIDIA_PRODUCT_NAME:=FIXME?UNKNOWN}"
