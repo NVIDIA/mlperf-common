@@ -152,11 +152,13 @@ esac
 : "${MLPERF_COOLING:=""}"
 : "${MLPERF_HW_NOTES:=""}"
 
-# if caller defines MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES we construct a
-# more interesting system name for multi-node systems
-if [[ "${MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES:-0}" -eq 1 ]] && ((MLPERF_NUM_NODES > 1)); then
-    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME}_n${MLPERF_NUM_NODES}"
+SYS_SIZE=${MLPERF_NUM_NODES} # default system size
+if [[ "$MLPERF_SYSTEM_NAME" == *"GB200"* ]]; then
+    SYS_SIZE="$(( (${MLPERF_NUM_NODES}+17)/18 ))"
 fi
+MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME/@MLPERF_SYS_SIZE@/${SYS_SIZE}}"
+
+
 
 # variables we derive from the NVIDIA container
 : "${NVIDIA_PRODUCT_NAME:=FIXME?UNKNOWN}"
