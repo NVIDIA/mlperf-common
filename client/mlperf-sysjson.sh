@@ -155,7 +155,11 @@ esac
 # if caller defines MLPERF_SYSJSON_SYSNAME_INCLUDE_NUM_NODES we construct a
 # more interesting system name for multi-node systems
 if [[ "${MLPERF_SYSTEM_NAME}" != "UNKNOWN_MLPERF_SYSTEM_NAME" ]]; then
-    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME/MLPERF_SYS_SIZE/${MLPERF_NUM_NODES}x}"
+    SYS_SIZE=${MLPERF_NUM_NODES} # default system size is one node
+    if [[ "$MLPERF_SYSTEM_NAME" == *"GB200"* ]]; then
+        SYS_SIZE="$(( (${MLPERF_NUM_NODES}+17)/18 ))"
+    fi
+    MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME/MLPERF_SYS_SIZE/${SYS_SIZE}x}"
 fi
 
 
