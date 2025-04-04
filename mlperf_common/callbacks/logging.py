@@ -360,7 +360,7 @@ class MLPerfLogger(Logger):
 
 
 
-class DebuggingCallback(pl.Callback):
+class StatsLogCallback(pl.Callback):
     def __init__(self):
         super().__init__()
         self.logs = {
