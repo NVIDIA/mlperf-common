@@ -13,4 +13,4 @@
 # limitations under the License.
 
 
-from .logging import LoggingCallback, MLPerfLogger, mllogger
+from .logging import LoggingCallback, MLPerfLogger, StatsLogCallback, mllogger
