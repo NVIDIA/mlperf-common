@@ -27,16 +27,13 @@ try:
     import lightning.pytorch as pl
     from lightning.pytorch.loggers import Logger
     from lightning.pytorch.utilities import rank_zero_only
-    
-    import torch
-    import torch.distributed as dist
-    
-    from megatron.core import parallel_state
 except ImportError:
     import pytorch_lightning as pl
     from pytorch_lightning.loggers import Logger
     from pytorch_lightning.utilities import rank_zero_only
 
+import torch
+import torch.distributed as dist
 
 from mlperf_common.frameworks.pyt import PyTCommunicationHandler
 from mlperf_common.logging import MLLoggerWrapper
@@ -363,6 +360,7 @@ class MLPerfLogger(Logger):
 class StatsLogCallback(pl.Callback):
     def __init__(self):
         super().__init__()
+        from megatron.core import parallel_state
         self.logs = {
             "train_loss_batch": [],
             "val_loss_batch": [],
