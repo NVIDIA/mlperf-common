@@ -361,6 +361,7 @@ class StatsLogCallback(pl.Callback):
     def __init__(self):
         super().__init__()
         from megatron.core import parallel_state
+        self.parallel_state = parallel_state
         self.logs = {
             "train_loss_batch": [],
             "val_loss_batch": [],
@@ -428,7 +429,7 @@ class StatsLogCallback(pl.Callback):
         def alphanum_key(s: str):
             return [int(text) if text.isdigit() else text for text in re.split(r'(\d+)', s)]
 
-        group = parallel_state.get_pipeline_model_parallel_group()
+        group = self.parallel_state.get_pipeline_model_parallel_group()
         group_size = dist.get_world_size(group=group)
         gathered_stats = [None for _ in range(group_size)]
         dist.all_gather_object(gathered_stats, stats_dict, group=group)
@@ -440,7 +441,7 @@ class StatsLogCallback(pl.Callback):
         def alphanum_key(s: str):
             return [int(text) if text.isdigit() else text for text in re.split(r'(\d+)', s)]
 
-        group = parallel_state.get_tensor_model_parallel_group()
+        group = self.parallel_state.get_tensor_model_parallel_group()
         group_size = dist.get_world_size(group=group)
         gathered_stats = [None for _ in range(group_size)]
         dist.all_gather_object(gathered_stats, stats_dict, group=group)
@@ -456,16 +457,16 @@ class StatsLogCallback(pl.Callback):
         use_dp_group: bool = True,
     ) -> Dict[str, float]:
         if not self.reduce_tp:
-            group = parallel_state.get_context_parallel_group()
+            group = self.parallel_state.get_context_parallel_group()
         elif use_tp_group:
-            group = parallel_state.get_tensor_model_parallel_group()
+            group = self.parallel_state.get_tensor_model_parallel_group()
         else:
-            group = parallel_state.get_tensor_and_context_parallel_group()
+            group = self.parallel_state.get_tensor_and_context_parallel_group()
         result = self._gather_group_stats(stats, group=group)
         result = self._aggregate_local_stats(result)
 
         if use_dp_group:
-            dp_group = parallel_state.get_data_parallel_group()
+            dp_group = self.parallel_state.get_data_parallel_group()
             result = self._gather_group_stats(result, group=dp_group)
             result = self._aggregate_local_stats(result, avg_variance=True)
 
@@ -528,7 +529,7 @@ class StatsLogCallback(pl.Callback):
             return
 
         stats = self._compute_tensor_stats(act)
-        if parallel_state.get_tensor_and_context_parallel_world_size() > 1:
+        if self.parallel_state.get_tensor_and_context_parallel_world_size() > 1:
             stats = self._collect_group_stats(stats)
 
         self.record_stats(name, stats, None, self.current_activation_stats)
@@ -542,7 +543,7 @@ class StatsLogCallback(pl.Callback):
             return
 
         stats = self._compute_tensor_stats(grad, batch_dim=1)
-        if parallel_state.get_tensor_and_context_parallel_world_size() > 1:
+        if self.parallel_state.get_tensor_and_context_parallel_world_size() > 1:
             stats = self._collect_group_stats(stats)
 
         self.record_stats(name, stats, None, self.current_grad_stats)
@@ -551,13 +552,13 @@ class StatsLogCallback(pl.Callback):
         for name, param in pl_module.named_parameters():
             if param.requires_grad:
                 stats = self._compute_tensor_stats(param.data, per_batch=False)
-                if parallel_state.get_tensor_model_parallel_world_size() > 1:
+                if self.parallel_state.get_tensor_model_parallel_world_size() > 1:
                     stats = self._collect_group_stats(stats, use_tp_group=True, use_dp_group=False)
 
                 if self.use_vp:
                     name = self.set_layer_vp_chunk(name, chunk_idx)
                 if not self.reduce_tp:
-                    name = f"{name}_tp{parallel_state.get_tensor_model_parallel_rank()}"
+                    name = f"{name}_tp{self.parallel_state.get_tensor_model_parallel_rank()}"
                 self.current_weights_stats[name] = stats
 
     def extract_loss(self, outputs: Any) -> Optional[torch.Tensor]:
@@ -575,8 +576,8 @@ class StatsLogCallback(pl.Callback):
         if loss is not None:
             loss = loss.cpu()
 
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
-            group = parallel_state.get_pipeline_model_parallel_group()
+        if self.parallel_state.get_pipeline_model_parallel_world_size() > 1:
+            group = self.parallel_state.get_pipeline_model_parallel_group()
             gathered_losses = [None for _ in range(dist.get_world_size(group=group))]
             dist.all_gather_object(gathered_losses, loss, group=group)
             gathered_losses = [t.mean() for t in gathered_losses if isinstance(t, torch.Tensor)]
@@ -591,7 +592,7 @@ class StatsLogCallback(pl.Callback):
             return name
 
         layer_idx = int(match.group(1))
-        pp_rank = parallel_state.get_pipeline_model_parallel_rank()
+        pp_rank = self.parallel_state.get_pipeline_model_parallel_rank()
         orig_layer_idx = pp_rank * self.layers_per_pipeline + vp_chunk * self.layers_per_vchunk + layer_idx
         orig_name = re.sub(rf'\.{layer_idx}\.', f'.{orig_layer_idx}.', name, count=1)
         return orig_name
@@ -602,7 +603,7 @@ class StatsLogCallback(pl.Callback):
                 if self.use_vp:
                     name = self.set_layer_vp_chunk(name, chunk_idx)
                 if not self.reduce_tp:
-                    name = f"{name}_tp{parallel_state.get_tensor_model_parallel_rank()}"
+                    name = f"{name}_tp{self.parallel_state.get_tensor_model_parallel_rank()}"
                 self.activation_hooks.append(
                     module.register_forward_hook(partial(self._activation_hook, name))
                 )
@@ -614,8 +615,8 @@ class StatsLogCallback(pl.Callback):
     #
 
     def on_train_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
-        vp_is_none = parallel_state.get_virtual_pipeline_model_parallel_world_size() is None
-        self.use_vp = not vp_is_none and parallel_state.get_virtual_pipeline_model_parallel_world_size() > 0
+        vp_is_none = self.parallel_state.get_virtual_pipeline_model_parallel_world_size() is None
+        self.use_vp = not vp_is_none and self.parallel_state.get_virtual_pipeline_model_parallel_world_size() > 0
 
         if self.use_vp:
             config = trainer.model[0].config
@@ -625,10 +626,10 @@ class StatsLogCallback(pl.Callback):
             if config.account_for_loss_in_pipeline_split:
                 num_layers += 1
 
-            self.layers_per_pipeline = num_layers // parallel_state.get_pipeline_model_parallel_world_size()
-            self.layers_per_vchunk = self.layers_per_pipeline // parallel_state.get_virtual_pipeline_model_parallel_world_size()
-            self.pp_size = parallel_state.get_pipeline_model_parallel_world_size()
-            self.vp_size = parallel_state.get_virtual_pipeline_model_parallel_world_size()
+            self.layers_per_pipeline = num_layers // self.parallel_state.get_pipeline_model_parallel_world_size()
+            self.layers_per_vchunk = self.layers_per_pipeline // self.parallel_state.get_virtual_pipeline_model_parallel_world_size()
+            self.pp_size = self.parallel_state.get_pipeline_model_parallel_world_size()
+            self.vp_size = self.parallel_state.get_virtual_pipeline_model_parallel_world_size()
             for chunk_idx, model_chunk in enumerate(trainer.model):
                 self.register_hooks(model_chunk, chunk_idx)
                 self._log_weights_stats(model_chunk, chunk_idx)
@@ -636,7 +637,7 @@ class StatsLogCallback(pl.Callback):
             self.register_hooks(pl_module)
             self._log_weights_stats(pl_module)
 
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
+        if self.parallel_state.get_pipeline_model_parallel_world_size() > 1:
             self.current_weights_stats = self._collect_pp_dicts(self.current_weights_stats)
         if not self.reduce_tp:
             self.current_weights_stats = self._collect_tp_dicts(self.current_weights_stats)
@@ -683,7 +684,7 @@ class StatsLogCallback(pl.Callback):
         if loss is not None:
             self.logs["train_loss_batch"].append(loss.item())
 
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
+        if self.parallel_state.get_pipeline_model_parallel_world_size() > 1:
             self.current_grad_stats = self._collect_pp_dicts(self.current_grad_stats)
             self.current_activation_stats = self._collect_pp_dicts(self.current_activation_stats)
 
@@ -705,7 +706,7 @@ class StatsLogCallback(pl.Callback):
         else:
             self._log_weights_stats(pl_module)
 
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
+        if self.parallel_state.get_pipeline_model_parallel_world_size() > 1:
             self.current_weights_stats = self._collect_pp_dicts(self.current_weights_stats)
         for module_name, stats in self.current_weights_stats.items():
             self.record_stats(module_name, stats, "weights_stats", self.logs)
@@ -731,8 +732,8 @@ class StatsLogCallback(pl.Callback):
         if not self.enabled:
             return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
-            group = parallel_state.get_pipeline_model_parallel_group()
+        if self.parallel_state.get_pipeline_model_parallel_world_size() > 1:
+            group = self.parallel_state.get_pipeline_model_parallel_group()
             group_size = dist.get_world_size(group=group)
             gathered_stats = [None for _ in range(group_size)]
             dist.all_gather_object(gathered_stats, outputs, group=group)
@@ -760,9 +761,9 @@ class StatsLogCallback(pl.Callback):
     def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         if getattr(trainer, "is_global_zero", True):
             try:
-                tp = parallel_state.get_tensor_model_parallel_world_size()
-                pp = parallel_state.get_pipeline_model_parallel_world_size()
-                cp = parallel_state.get_context_parallel_world_size()
+                tp = self.parallel_state.get_tensor_model_parallel_world_size()
+                pp = self.parallel_state.get_pipeline_model_parallel_world_size()
+                cp = self.parallel_state.get_context_parallel_world_size()
                 filepath = f"/results/stats_tp{tp}_pp{pp}_cp{cp}_seed{os.getenv('SEED', '1')}.json"
                 with open(filepath, "w") as f:
                     json.dump(self.logs, f, indent=4)
