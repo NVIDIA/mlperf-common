@@ -1,5 +1,6 @@
-#!/bin/bash
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+#!/usr/bin/env python3
+
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,4 +14,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-/sbin/sysctl vm.drop_caches=3
+import os
+import sys
+import ctypes
+from ctypes import c_int, c_longlong as c_off_t
+
+# Load libc and define posix_fadvise
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+posix_fadvise = libc.posix_fadvise
+posix_fadvise.argtypes = [c_int, c_off_t, c_off_t, c_int]
+posix_fadvise.restype = c_int
+
+# https://codebrowser.dev/glibc/glibc/bits/fcntl.h.html#144
+POSIX_FADV_DONTNEED = 4
+
+def advise_dontneed(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        size = os.fstat(fd).st_size
+        if size > 0:
+            ret = posix_fadvise(fd, 0, size, POSIX_FADV_DONTNEED)
+            if ret != 0:
+                raise OSError(ret, os.strerror(ret))
+        os.close(fd)
+    except Exception as e:
+        print(f"Error on {path}: {e}", file=sys.stderr)
+
+def walk_and_advise(paths):
+    for p in paths:
+        if os.path.isfile(p):
+            advise_dontneed(p)
+        elif os.path.isdir(p):
+            for root, _, files in os.walk(p):
+                for f in files:
+                    full_path = os.path.join(root, f)
+                    if os.path.isfile(full_path):
+                        advise_dontneed(full_path)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: evict.py <file_or_dir>...", file=sys.stderr)
+        sys.exit(1)
+    walk_and_advise(sys.argv[1:])
