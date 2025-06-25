@@ -119,10 +119,6 @@ class LoggingCallback(pl.Callback):
     ) -> None:
         if not trainer.warmup:
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
-            self._log_training_throughput(
-                trainer.global_step,
-                train_batch_size,
-            )
 
             if self.train_block_started:
                 self._end_train_block(train_batch_size)
@@ -143,12 +139,6 @@ class LoggingCallback(pl.Callback):
         if not trainer.warmup:
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
             validation_samples = self.get_validation_samples_count(trainer, pl_module)
-
-            self._log_validation_throughput(
-                trainer.global_step,
-                train_batch_size,
-                validation_samples,
-            )
 
             mllogger.end(
                 mllogger.constants.EVAL_STOP,
@@ -214,40 +204,6 @@ class LoggingCallback(pl.Callback):
         )
         self.train_block_started = False
 
-    def _log_training_throughput(
-        self,
-        trainer_step: int,
-        train_batch_size: int,
-    ) -> None:
-        delta_t = self.timer.get_delta()
-        delta_step = trainer_step - self.previous_step
-        throughput = (delta_step * train_batch_size) / delta_t
-        mllogger.event(
-            key="tracked_stats",
-            metadata={"step": self.train_current_block * train_batch_size},
-            value={
-                "throughput": throughput,
-                "train_step_time": delta_t / delta_step,
-                "max_memory_usage": round(torch.cuda.max_memory_allocated() / (1024*1024*1024), 3)
-            },
-        )
-
-        self.previous_step = trainer_step
-
-    def _log_validation_throughput(
-        self,
-        trainer_step: int,
-        train_batch_size: int,
-        validation_samples: int,
-    ) -> None:
-        delta_t = self.timer.get_delta()
-        throughput = (validation_samples) / delta_t
-        mllogger.event(
-            key="tracked_stats",
-            metadata={"step": trainer_step * train_batch_size},
-            value={"validation_throughput": throughput},
-        )
-
 
 class MLPerfLogger(Logger):
     def __init__(
@@ -303,6 +259,7 @@ class MLPerfLogger(Logger):
             mllogger.event(
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
+                    'step': self.trainer.global_step,
                     mllogger.constants.SAMPLES_COUNT: self.trainer.global_step
                     * self.custom_callback.get_train_step_samples_count(
                         self.trainer, self.model
