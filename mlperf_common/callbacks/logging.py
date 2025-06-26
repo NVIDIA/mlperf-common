@@ -120,6 +120,11 @@ class LoggingCallback(pl.Callback):
         if not trainer.warmup:
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
 
+            self._log_train_step_time(
+                trainer.global_step,
+                train_batch_size,
+            )
+
             if self.train_block_started:
                 self._end_train_block(train_batch_size)
 
@@ -203,6 +208,23 @@ class LoggingCallback(pl.Callback):
             },
         )
         self.train_block_started = False
+
+    def _log_train_step_time(
+        self,
+        trainer_step: int,
+        train_batch_size: int,
+    ) -> None:
+        delta_t = self.timer.get_delta()
+        delta_step = trainer_step - self.previous_step
+        mllogger.event(
+            key="tracked_stats",
+            metadata={mllogger.constants.SAMPLES_COUNT: self.train_current_block * train_batch_size},
+            value={
+                "train_step_time": delta_t / delta_step,
+            },
+        )
+
+        self.previous_step = trainer_step
 
 
 class MLPerfLogger(Logger):
