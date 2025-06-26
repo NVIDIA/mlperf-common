@@ -2,7 +2,7 @@ import os
 import math                     # for ceil()
 import pynvml                   # from package nvidia-ml-py3
 
-################################################################################ 
+################################################################################
 # start python script bound to appropriate cores for gpu given by the
 # LOCAL_RANK environment variable
 #
@@ -36,7 +36,7 @@ import pynvml                   # from package nvidia-ml-py3
 # Inside the container only the appropriate gpus will be visible, and they will
 # be numbered 0...SLURM_NTASKS_PER_NODE, and NVIDIA_VISIBLE_DEVICES will be
 # "all", not the "real" list of gpus.
-################################################################################ 
+################################################################################
 
 pynvml.nvmlInit()
 
@@ -65,7 +65,7 @@ class device:
         # "pythonic" way to turn string into list of 0/1 ints
         affinity_list = [int(x) for x in affinity_string]
         affinity_list.reverse()     # so core 0 is in 0th element of list
-            
+
         # "pythonic" way to turn into list of indices of non-zero elements
         return [i for i,e in enumerate(affinity_list) if e!=0]
 
