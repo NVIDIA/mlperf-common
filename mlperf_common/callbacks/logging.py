@@ -128,10 +128,12 @@ class LoggingCallback(pl.Callback):
             if self.train_block_started:
                 self._end_train_block(trainer, train_batch_size)
 
+            validation_samples = self.get_validation_samples_count(trainer, pl_module)
+            self.validation_samples = validation_samples # we need to access this number from log_metrics function, but we don't have an access to trainer there
             mllogger.start(
                 mllogger.constants.EVAL_START,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                    mllogger.constants.SAMPLES_COUNT: validation_samples,
                     'step': trainer.global_step
                 },
             )
@@ -148,7 +150,7 @@ class LoggingCallback(pl.Callback):
             mllogger.end(
                 mllogger.constants.EVAL_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                    mllogger.constants.SAMPLES_COUNT: validation_samples,
                     'step': trainer.global_step
                 },
             )
@@ -278,14 +280,12 @@ class MLPerfLogger(Logger):
     ) -> None:
         if self.validation_metric in metrics:
             computed_metric = self.compute_validation_metric(metrics)
+            validation_samples = self.validation_samples if hasattr(self, 'validation_samples') else None # computed in on_validation_start
             mllogger.event(
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
                     'step': self.trainer.global_step,
-                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step
-                    * self.custom_callback.get_train_step_samples_count(
-                        self.trainer, self.model
-                    )
+                    mllogger.constants.SAMPLES_COUNT: validation_samples,
                 },
                 value=computed_metric,
             )
