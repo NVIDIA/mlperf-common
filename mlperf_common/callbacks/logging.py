@@ -190,7 +190,7 @@ class LoggingCallback(pl.Callback):
 
     def _start_train_block(self, trainer, train_batch_size: int) -> None:
         self.train_block_started = True
-        self.train_current_block = trainer_step
+        self.train_current_block = trainer.global_step
         mllogger.start(
             mllogger.constants.BLOCK_START,
             metadata={
