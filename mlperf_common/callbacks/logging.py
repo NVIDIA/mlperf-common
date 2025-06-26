@@ -82,7 +82,7 @@ class LoggingCallback(pl.Callback):
             self.log_custom_timedelta("init_finished", trainer.global_step)
             mllogger.log_init_stop_run_start()
             self._start_train_block(
-                trainer.global_step,
+                trainer,
                 self.get_train_step_samples_count(trainer, pl_module),
             )
 
@@ -92,7 +92,7 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         if self.train_block_started:
-            self._end_train_block(self.get_train_step_samples_count(trainer, pl_module))
+            self._end_train_block(trainer, self.get_train_step_samples_count(trainer, pl_module))
 
         if hasattr(trainer, "run_stop_logged") and not trainer.run_stop_logged:
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
@@ -106,8 +106,8 @@ class LoggingCallback(pl.Callback):
             mllogger.end(
                 mllogger.constants.RUN_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
-                    * train_batch_size,
+                    'step': trainer.global_step,
+                    mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
                     "status": status,
                 },
             )
@@ -126,13 +126,13 @@ class LoggingCallback(pl.Callback):
             )
 
             if self.train_block_started:
-                self._end_train_block(train_batch_size)
+                self._end_train_block(trainer, train_batch_size)
 
             mllogger.start(
                 mllogger.constants.EVAL_START,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
-                    * train_batch_size
+                    mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                    'step': trainer.global_step
                 },
             )
 
@@ -148,14 +148,14 @@ class LoggingCallback(pl.Callback):
             mllogger.end(
                 mllogger.constants.EVAL_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: trainer.global_step
-                    * train_batch_size
+                    mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                    'step': trainer.global_step
                 },
             )
 
             if not trainer.should_stop:
                 self._start_train_block(
-                    trainer.global_step,
+                    trainer,
                     train_batch_size,
                 )
 
@@ -188,23 +188,23 @@ class LoggingCallback(pl.Callback):
     def __deepcopy__(self, memo):
         return LoggingCallback(self.force_success)
 
-    def _start_train_block(self, trainer_step: int, train_batch_size: int) -> None:
+    def _start_train_block(self, trainer, train_batch_size: int) -> None:
         self.train_block_started = True
         self.train_current_block = trainer_step
         mllogger.start(
             mllogger.constants.BLOCK_START,
             metadata={
-                mllogger.constants.SAMPLES_COUNT: self.train_current_block
-                * train_batch_size
+                mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                'step': trainer.global_step,
             },
         )
 
-    def _end_train_block(self, train_batch_size: int) -> None:
+    def _end_train_block(self, trainer, train_batch_size: int) -> None:
         mllogger.end(
             mllogger.constants.BLOCK_STOP,
             metadata={
-                mllogger.constants.SAMPLES_COUNT: self.train_current_block
-                * train_batch_size
+                mllogger.constants.SAMPLES_COUNT: trainer.val_check_interval * train_batch_size,
+                'step': trainer.global_step,
             },
         )
         self.train_block_started = False
@@ -218,7 +218,7 @@ class LoggingCallback(pl.Callback):
         delta_step = trainer_step - self.previous_step
         mllogger.event(
             key="tracked_stats",
-            metadata={mllogger.constants.SAMPLES_COUNT: self.train_current_block * train_batch_size},
+            metadata={mllogger.constants.SAMPLES_COUNT: delta_step * train_batch_size},
             value={
                 "train_step_time": delta_t / delta_step,
             },
