@@ -144,6 +144,7 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> None:
         if not trainer.warmup:
+            self.timer.get_delta() # tick the timer
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
             validation_samples = self.get_validation_samples_count(trainer, pl_module)
 
