@@ -129,7 +129,6 @@ class LoggingCallback(pl.Callback):
                 self._end_train_block(trainer, train_batch_size)
 
             validation_samples = self.get_validation_samples_count(trainer, pl_module)
-            self.validation_samples = validation_samples # we need to access this number from log_metrics function, but we don't have an access to trainer there
             mllogger.start(
                 mllogger.constants.EVAL_START,
                 metadata={
@@ -281,7 +280,8 @@ class MLPerfLogger(Logger):
     ) -> None:
         if self.validation_metric in metrics:
             computed_metric = self.compute_validation_metric(metrics)
-            validation_samples = self.validation_samples if hasattr(self, 'validation_samples') else None # computed in on_validation_start
+            validation_samples = self.trainer.val_dataloaders.batch_sampler.global_batch_size * len(self.trainer.val_dataloaders)
+
             mllogger.event(
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
