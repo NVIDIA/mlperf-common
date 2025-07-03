@@ -274,7 +274,7 @@ class MLPerfLogger(Logger):
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
                     'step': self.trainer.global_step,
-                    mllogger.constants.SAMPLES_COUNT: trainer.global_step * train_batch_size,
+                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step * train_batch_size,
                 },
                 value=computed_metric,
             )
