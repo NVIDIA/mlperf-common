@@ -269,12 +269,13 @@ class MLPerfLogger(Logger):
     ) -> None:
         if self.validation_metric in metrics:
             computed_metric = self.compute_validation_metric(metrics)
-
             mllogger.event(
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
-                    'step': self.trainer.global_step,
-                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step * train_batch_size,
+                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step
+                    * self.custom_callback.get_train_step_samples_count(
+                        self.trainer, self.model
+                    )
                 },
                 value=computed_metric,
             )
