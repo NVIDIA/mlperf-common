@@ -361,6 +361,10 @@ class StatsLogCallback(pl.Callback):
         self.current_batch_idx = 0
         self.run_n_iters = int(os.environ.get("RUN_N_ITERS", "0"))
         self.enabled = True
+
+        tp = self.parallel_state.get_tensor_model_parallel_world_size()
+        pp = self.parallel_state.get_pipeline_model_parallel_world_size()
+        cp = self.parallel_state.get_context_parallel_world_size()
         self.save_path = os.environ.get("STAT_CALLBACK_FNAME", f"/results/stats_tp{tp}_pp{pp}_cp{cp}_seed{os.getenv('SEED', '1')}.json")
 
     @staticmethod
@@ -742,9 +746,6 @@ class StatsLogCallback(pl.Callback):
     def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         if getattr(trainer, "is_global_zero", True):
             try:
-                tp = self.parallel_state.get_tensor_model_parallel_world_size()
-                pp = self.parallel_state.get_pipeline_model_parallel_world_size()
-                cp = self.parallel_state.get_context_parallel_world_size()
                 with open(self.save_path, "w") as f:
                     json.dump(self.logs, f, indent=4)
             except Exception as e:
