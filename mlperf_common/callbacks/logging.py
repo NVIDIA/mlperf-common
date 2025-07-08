@@ -338,7 +338,7 @@ class MLPerfLogger(Logger):
 
 
 class StatsLogCallback(pl.Callback):
-    def __init__(self):
+    def __init__(self, save_path=None):
         super().__init__()
         from megatron.core import parallel_state
         self.parallel_state = parallel_state
@@ -362,7 +362,7 @@ class StatsLogCallback(pl.Callback):
         self.run_n_iters = int(os.environ.get("RUN_N_ITERS", "0"))
         self.enabled = True
 
-        self.save_path = os.environ.get("STAT_CALLBACK_FNAME", f"/results/stats_seed{os.getenv('SEED', '1')}.json")
+        self.save_path = save_path if save_path is not None else  f"/results/stats_seed{os.getenv('SEED', '1')}.json"
 
     @staticmethod
     def _compute_tensor_stats(
