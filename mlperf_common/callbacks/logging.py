@@ -128,11 +128,10 @@ class LoggingCallback(pl.Callback):
             if self.train_block_started:
                 self._end_train_block(trainer, train_batch_size)
 
-            validation_samples = self.get_validation_samples_count(trainer, pl_module)
             mllogger.start(
                 mllogger.constants.EVAL_START,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: validation_samples,
+                    mllogger.constants.SAMPLES_COUNT: trainer.global_step * train_batch_size,
                     'step': trainer.global_step
                 },
             )
@@ -145,12 +144,11 @@ class LoggingCallback(pl.Callback):
         if not trainer.warmup:
             self.log_custom_timedelta("validation_time", step = trainer.global_step)
             train_batch_size = self.get_train_step_samples_count(trainer, pl_module)
-            validation_samples = self.get_validation_samples_count(trainer, pl_module)
 
             mllogger.end(
                 mllogger.constants.EVAL_STOP,
                 metadata={
-                    mllogger.constants.SAMPLES_COUNT: validation_samples,
+                    mllogger.constants.SAMPLES_COUNT: trainer.global_step * train_batch_size,
                     'step': trainer.global_step
                 },
             )
@@ -177,15 +175,6 @@ class LoggingCallback(pl.Callback):
         pl_module: pl.LightningModule,
     ) -> int:
         return trainer.train_dataloader.batch_sampler.global_batch_size
-
-    def get_validation_samples_count(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-    ) -> int:
-        return trainer.val_dataloaders.batch_sampler.global_batch_size * len(
-            trainer.val_dataloaders
-        )
 
     def __deepcopy__(self, memo):
         return LoggingCallback(self.force_success)
@@ -280,13 +269,13 @@ class MLPerfLogger(Logger):
     ) -> None:
         if self.validation_metric in metrics:
             computed_metric = self.compute_validation_metric(metrics)
-            validation_samples = self.trainer.val_dataloaders.batch_sampler.global_batch_size * len(self.trainer.val_dataloaders)
-
             mllogger.event(
                 key=mllogger.constants.EVAL_ACCURACY,
                 metadata={
-                    'step': self.trainer.global_step,
-                    mllogger.constants.SAMPLES_COUNT: validation_samples,
+                    mllogger.constants.SAMPLES_COUNT: self.trainer.global_step
+                    * self.custom_callback.get_train_step_samples_count(
+                        self.trainer, self.model
+                    )
                 },
                 value=computed_metric,
             )
