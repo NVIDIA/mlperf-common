@@ -12,10 +12,13 @@ fi
 TELEMETRY_FILE=$1
 MLLOG_FILE=$2
 
+# 1. look for start/stop tags
+# 2. clean the output and extract time_ms from json
+# 3. bash magic to make pipe work
 read start_ms end_ms < <(
-  grep ${MLLOG_FILE} -e "run_start\|run_stop" | \ # look for start/stop tags
-  sed 's/0: :::MLLOG //' | jq '.time_ms' | \  # clean the output and extract time_ms from json
-  sort | head -n 2 | tr '\n' ' ' # bash magic to make pipe work
+  grep ${MLLOG_FILE} -e "run_start\|run_stop" | \
+  sed 's/0: :::MLLOG //' | jq '.time_ms' | \
+  sort | head -n 2 | tr '\n' ' '
 )
 
 # Date conversion
