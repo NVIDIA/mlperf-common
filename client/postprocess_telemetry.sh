@@ -35,7 +35,7 @@ awk -v start="$start" -v end="$end" '
 BEGIN { FS = ", "; OFS = ", " }
 NR == 1 { print; next }
 {
-  timestamp = $1
+  timestamp = $2
   if (timestamp >= start && timestamp <= end)
     print
 }
