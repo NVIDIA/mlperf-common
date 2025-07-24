@@ -16,9 +16,9 @@ MLLOG_FILE=$2
 # 2. close the pipe after 2 lines. This is needed to be sure there are no errors down the pipe.
 # 3. clean the output and extract time_ms from json
 read start_ms end_ms < <(
-  grep ${MLLOG_FILE} -e "run_start\|run_stop" | \
+  grep ${MLLOG_FILE} -e ":::MLLOG.*\(run_start\|run_stop\)" | \
   head -n 2 | \
-  sed 's/0: :::MLLOG //' | jq '.time_ms' | \
+  sed -E 's/^.*:::MLLOG //' | jq '.time_ms' | \
   sort | tr '\n' ' '
 )
 
