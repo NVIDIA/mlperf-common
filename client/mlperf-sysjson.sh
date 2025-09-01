@@ -153,7 +153,7 @@ esac
 : "${MLPERF_HW_NOTES:=""}"
 
 SYS_SIZE=${MLPERF_NUM_NODES} # default system size
-if [[ "$MLPERF_SYSTEM_NAME" == *"GB200"* ]]; then
+if [[ "$MLPERF_SYSTEM_NAME" == *"NVL72"* ]]; then
     SYS_SIZE="$(( (${MLPERF_NUM_NODES}+17)/18 ))"
 fi
 MLPERF_SYSTEM_NAME="${MLPERF_SYSTEM_NAME/@MLPERF_SYS_SIZE@/${SYS_SIZE}}"
