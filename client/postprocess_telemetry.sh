@@ -41,4 +41,5 @@ NR == 1 { print; next }
 }
 ' ${TELEMETRY_FILE} > ${TMP_FILE}
 
+mv ${TELEMETRY_FILE} ${TELEMETRY_FILE}.bak
 mv ${TMP_FILE} ${TELEMETRY_FILE}
