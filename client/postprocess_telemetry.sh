@@ -27,6 +27,7 @@ read start_ms end_ms < <(
 #export TZ=America/Los_Angeles
 start=$(date -d "@$(($start_ms/1000))" "+%Y/%m/%d %H:%M:%S")
 end=$(date -d "@$(($end_ms/1000))" "+%Y/%m/%d %H:%M:%S")
+echo "Telemetry processing. Start=${start}; End=${end}"
 
 
 TMP_FILE=$(mktemp)
