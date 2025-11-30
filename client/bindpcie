@@ -26,11 +26,11 @@ Options:
         * exclusive -- bind each rank to an exclusive set of cores near its GPU
         * exclusive,nosmt -- bind each rank to an exclusive set of cores near its GPU, without hyperthreading
         * node -- bind each rank to all cores in the NUMA node nearest its GPU [default]
-	* *.sh -- bind each rank using the bash associative array bind_cpu_cores or bind_cpu_nodes from a file
+        * *.sh -- bind each rank using the bash associative array bind_cpu_cores or bind_cpu_nodes from a file
         * off -- don't bind
     --mem=MODE
         * node -- bind each rank to the nearest NUMA node [default]
-	* *.sh -- bind each rank using the bash associative array bind_mem from a file
+        * *.sh -- bind each rank using the bash associative array bind_mem from a file
         * off -- don't bind
     --ib=MODE
         * single -- bind each rank to a single IB device near its GPU
