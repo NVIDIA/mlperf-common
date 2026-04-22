@@ -15,7 +15,38 @@
 # limitations under the License.
 
 import argparse
+import hashlib
+import json
+import re
 from pathlib import Path
+
+
+def canonical_json(obj) -> bytes:
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        ensure_ascii=True,       # no locale-dependent UTF-8 output
+        separators=(",", ":"),   # no whitespace at all
+        allow_nan=False,         # reject NaN/Infinity (not valid JSON)
+    ).encode("ascii")
+
+
+def sample_offsets(file_size: int, num_samples: int, slice_size: int) -> list[int]:
+    """Deterministic, spread-out offsets based on file size."""
+    if file_size <= slice_size * num_samples:
+        return [0]  # small file — just read the start
+    # Evenly spaced, but avoid byte 0 (headers are too similar across formats)
+    return [int(file_size * i / (num_samples + 1)) for i in range(1, num_samples + 1)]
+
+
+def fingerprint_file(path: Path, num_samples: int = 10, slice_size: int = 4096) -> dict:
+    size = path.stat().st_size
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for offset in sample_offsets(size, num_samples, slice_size):
+            f.seek(offset)
+            h.update(f.read(slice_size))
+    return {"num_bytes": size, "sparse_sha256": h.hexdigest()}
 
 
 def load_csv(expected_mounts_csv: Path) -> list[dict]:
@@ -71,7 +102,7 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["relative_path"] = str(path.relative_to(root))
         row["full_path"] = str(path)
         row["num_files"] = 1
-        row["num_bytes"] = path.stat().st_size
+        row.update(fingerprint_file(path))
         return [row]
     elif path.is_dir():
         rows = []
@@ -84,6 +115,8 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["full_path"] = str(path)
         row["num_files"] = sum([row["num_files"] for row in rows if row["type"] == "file"])
         row["num_bytes"] = sum([row["num_bytes"] for row in rows if row["type"] == "file"])
+        canon = canonical_json({row["relative_path"]: row["sparse_sha256"] for row in rows})
+        row["sparse_sha256"] = hashlib.sha256(canon).hexdigest()
         rows.append(row)
         return rows
     else:
