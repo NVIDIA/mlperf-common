@@ -217,7 +217,7 @@ def verify_actual_mounts(
         key = "sparse_sha256"
         if expected[key] == actual[key]:
             print_check_info(
-                f"mountcheck OK {actual['full_path']} {actual[key]} SHA256",
+                f"mountcheck OK {actual['full_path']} {key}={actual[key]}",
                 verbosity,
                 is_root_path,
             )
