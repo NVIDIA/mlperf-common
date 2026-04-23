@@ -34,7 +34,9 @@ def canonical_json(obj) -> bytes:
 def sample_offsets(file_size: int, num_samples: int, slice_size: int) -> list[int]:
     """Deterministic, spread-out offsets based on file size."""
     if file_size <= slice_size * num_samples:
-        return [0]  # small file — just read the start
+        # Small file, we can just read from the beginning,
+        # even if the header is similar
+        return [0]
     # Evenly spaced, but avoid byte 0 (headers are too similar across formats)
     return [int(file_size * i / (num_samples + 1)) for i in range(1, num_samples + 1)]
 
@@ -42,10 +44,14 @@ def sample_offsets(file_size: int, num_samples: int, slice_size: int) -> list[in
 def fingerprint_file(path: Path, num_samples: int = 10, slice_size: int = 4096) -> dict:
     size = path.stat().st_size
     h = hashlib.sha256()
-    with path.open("rb") as f:
-        for offset in sample_offsets(size, num_samples, slice_size):
-            f.seek(offset)
-            h.update(f.read(slice_size))
+    try:
+        with path.open("rb") as f:
+            for offset in sample_offsets(size, num_samples, slice_size):
+                f.seek(offset)
+                h.update(f.read(slice_size))
+    except PermissionError:
+        print(f"No permission for {path}")
+        return {"num_bytes": size, "sparse_sha256": "0"}
     return {"num_bytes": size, "sparse_sha256": h.hexdigest()}
 
 
@@ -157,6 +163,11 @@ def initialize_expected_mounts(
 ) -> None:
     rows = inspect(mounts_to_verify)
     rows = filter_out(rows, extensions_to_filter_out)
+    # Directories are not useful for checking correct mounts.
+    # If they contain the right files, then the files themselves
+    # should be present. Checking directory summary information
+    # only complicates the problem without benefit.
+    rows = [row for row in rows if row["type"] != "dir"]
     for row in rows:
         del row["full_path"]
     save_csv(rows, expected_mounts_csv)
@@ -203,15 +214,16 @@ def verify_actual_mounts(
 
         actual = actual_rows_grouped[row_id]
 
-        if expected["num_bytes"] == actual["num_bytes"]:
+        key = "sparse_sha256"
+        if expected[key] == actual[key]:
             print_check_info(
-                f"mountcheck OK {actual['full_path']} {actual['num_bytes']} bytes",
+                f"mountcheck OK {actual['full_path']} {actual[key]} SHA256",
                 verbosity,
                 is_root_path,
             )
         else:
             print_check_info(
-                f"mountcheck WARNING {actual['full_path']} num bytes mismatch! expected={expected['num_bytes']} actual={actual['num_bytes']}",
+                f"mountcheck WARNING {actual['full_path']} {key} mismatch! expected={expected[key]} actual={actual[key]}",
                 verbosity,
                 is_root_path,
             )
