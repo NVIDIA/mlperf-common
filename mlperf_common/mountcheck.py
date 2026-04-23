@@ -15,7 +15,44 @@
 # limitations under the License.
 
 import argparse
+import hashlib
+import json
+import re
 from pathlib import Path
+
+
+def canonical_json(obj) -> bytes:
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        ensure_ascii=True,       # no locale-dependent UTF-8 output
+        separators=(",", ":"),   # no whitespace at all
+        allow_nan=False,         # reject NaN/Infinity (not valid JSON)
+    ).encode("ascii")
+
+
+def sample_offsets(file_size: int, num_samples: int, slice_size: int) -> list[int]:
+    """Deterministic, spread-out offsets based on file size."""
+    if file_size <= slice_size * num_samples:
+        # Small file, we can just read from the beginning,
+        # even if the header is similar
+        return [0]
+    # Evenly spaced, but avoid byte 0 (headers are too similar across formats)
+    return [int(file_size * i / (num_samples + 1)) for i in range(1, num_samples + 1)]
+
+
+def fingerprint_file(path: Path, num_samples: int = 10, slice_size: int = 4096) -> dict:
+    size = path.stat().st_size
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            for offset in sample_offsets(size, num_samples, slice_size):
+                f.seek(offset)
+                h.update(f.read(slice_size))
+    except PermissionError:
+        print(f"No permission for {path}")
+        return {"num_bytes": size, "sparse_sha256": "0"}
+    return {"num_bytes": size, "sparse_sha256": h.hexdigest()}
 
 
 def load_csv(expected_mounts_csv: Path) -> list[dict]:
@@ -71,7 +108,7 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["relative_path"] = str(path.relative_to(root))
         row["full_path"] = str(path)
         row["num_files"] = 1
-        row["num_bytes"] = path.stat().st_size
+        row.update(fingerprint_file(path))
         return [row]
     elif path.is_dir():
         rows = []
@@ -84,6 +121,8 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["full_path"] = str(path)
         row["num_files"] = sum([row["num_files"] for row in rows if row["type"] == "file"])
         row["num_bytes"] = sum([row["num_bytes"] for row in rows if row["type"] == "file"])
+        canon = canonical_json({row["relative_path"]: row["sparse_sha256"] for row in rows})
+        row["sparse_sha256"] = hashlib.sha256(canon).hexdigest()
         rows.append(row)
         return rows
     else:
@@ -124,6 +163,11 @@ def initialize_expected_mounts(
 ) -> None:
     rows = inspect(mounts_to_verify)
     rows = filter_out(rows, extensions_to_filter_out)
+    # Directories are not useful for checking correct mounts.
+    # If they contain the right files, then the files themselves
+    # should be present. Checking directory summary information
+    # only complicates the problem without benefit.
+    rows = [row for row in rows if row["type"] != "dir"]
     for row in rows:
         del row["full_path"]
     save_csv(rows, expected_mounts_csv)
@@ -170,15 +214,16 @@ def verify_actual_mounts(
 
         actual = actual_rows_grouped[row_id]
 
-        if expected["num_bytes"] == actual["num_bytes"]:
+        key = "sparse_sha256"
+        if expected[key] == actual[key]:
             print_check_info(
-                f"mountcheck OK {actual['full_path']} {actual['num_bytes']} bytes",
+                f"mountcheck OK {actual['full_path']} {key}={actual[key]}",
                 verbosity,
                 is_root_path,
             )
         else:
             print_check_info(
-                f"mountcheck WARNING {actual['full_path']} num bytes mismatch! expected={expected['num_bytes']} actual={actual['num_bytes']}",
+                f"mountcheck WARNING {actual['full_path']} {key} mismatch! expected={expected[key]} actual={actual[key]}",
                 verbosity,
                 is_root_path,
             )
