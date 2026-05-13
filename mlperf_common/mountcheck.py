@@ -17,17 +17,22 @@
 import argparse
 import hashlib
 import json
-import re
+from enum import Enum
 from pathlib import Path
+
+
+class Level(Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
 
 
 def canonical_json(obj) -> bytes:
     return json.dumps(
         obj,
         sort_keys=True,
-        ensure_ascii=True,       # no locale-dependent UTF-8 output
-        separators=(",", ":"),   # no whitespace at all
-        allow_nan=False,         # reject NaN/Infinity (not valid JSON)
+        ensure_ascii=True,  # no locale-dependent UTF-8 output
+        separators=(",", ":"),  # no whitespace at all
+        allow_nan=False,  # reject NaN/Infinity (not valid JSON)
     ).encode("ascii")
 
 
@@ -84,7 +89,15 @@ def save_csv(rows: list[dict], expected_mounts_csv: Path) -> None:
 def split(mounts_to_verify: list[str]) -> dict[str, Path]:
     mappings = {}
     for key_path_mapping in mounts_to_verify:
-        key, path = key_path_mapping.split(":")
+        if ":" not in key_path_mapping:
+            raise RuntimeError(
+                f"invalid key:path mapping {repr(key_path_mapping)}! Expected KEY:/path/to/mount."
+            )
+        key, path = key_path_mapping.split(":", 1)
+        if key == "" or path == "":
+            raise RuntimeError(
+                f"invalid key:path mapping {key_path_mapping}! Both key and path must be present."
+            )
         path = Path(path)
         if not path.exists():
             raise RuntimeError(f"{repr(path)} for key={repr(key)} does not exists!")
@@ -119,9 +132,15 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["type"] = "dir"
         row["relative_path"] = str(path.relative_to(root))
         row["full_path"] = str(path)
-        row["num_files"] = sum([row["num_files"] for row in rows if row["type"] == "file"])
-        row["num_bytes"] = sum([row["num_bytes"] for row in rows if row["type"] == "file"])
-        canon = canonical_json({row["relative_path"]: row["sparse_sha256"] for row in rows})
+        row["num_files"] = sum(
+            [row["num_files"] for row in rows if row["type"] == "file"]
+        )
+        row["num_bytes"] = sum(
+            [row["num_bytes"] for row in rows if row["type"] == "file"]
+        )
+        canon = canonical_json(
+            {row["relative_path"]: row["sparse_sha256"] for row in rows}
+        )
         row["sparse_sha256"] = hashlib.sha256(canon).hexdigest()
         rows.append(row)
         return rows
@@ -151,9 +170,9 @@ def filter_out(rows: list[dict], extensions_to_filter_out: list[str]) -> list[di
     return output
 
 
-def print_check_info(message: str, verbosity: int, is_root_path: bool) -> None:
-    if verbosity == 2 or (verbosity == 1 and is_root_path):
-        print(message + "\n", end="")
+def print_check(verbosity: int, level: Level, message: str) -> None:
+    if verbosity >= 2 or (verbosity == 1 and level == Level.WARNING):
+        print(f"mountcheck {level.value} {message}")
 
 
 def initialize_expected_mounts(
@@ -163,11 +182,10 @@ def initialize_expected_mounts(
 ) -> None:
     rows = inspect(mounts_to_verify)
     rows = filter_out(rows, extensions_to_filter_out)
-    # Directories are not useful for checking correct mounts.
-    # If they contain the right files, then the files themselves
-    # should be present. Checking directory summary information
-    # only complicates the problem without benefit.
-    rows = [row for row in rows if row["type"] != "dir"]
+    if len(rows) == 0:
+        raise RuntimeError(
+            "No expected mount entries found! Check --mounts_to_verify and --extensions_to_filter_out."
+        )
     for row in rows:
         del row["full_path"]
     save_csv(rows, expected_mounts_csv)
@@ -192,23 +210,22 @@ def verify_actual_mounts(
 
     for expected in expected_rows:
         row_id = (expected["key"], expected["type"], expected["relative_path"])
-        is_root_path = expected["relative_path"] == "."
 
         if row_id not in actual_rows_grouped:
             mount_key = expected["key"]
             mount_path = mappings.get(mount_key, None)
             if mount_path is None:
-                print_check_info(
-                    f"mountcheck WARNING missing key:path mapping in --mounts_to_verify for key={repr(mount_key)}",
+                print_check(
                     verbosity,
-                    is_root_path,
+                    Level.WARNING,
+                    f"missing key:path mapping in --mounts_to_verify for key={repr(mount_key)}",
                 )
             else:
                 missing_path = Path(mount_path) / Path(expected["relative_path"])
-                print_check_info(
-                    f"mountcheck WARNING {expected['type']} {missing_path} does not exist!",
+                print_check(
                     verbosity,
-                    is_root_path,
+                    Level.WARNING,
+                    f"{expected['type']} {missing_path} does not exist!",
                 )
             continue
 
@@ -216,30 +233,30 @@ def verify_actual_mounts(
 
         key = "sparse_sha256"
         if expected[key] == actual[key]:
-            print_check_info(
-                f"mountcheck OK {actual['full_path']} {key}={actual[key]}",
+            print_check(
                 verbosity,
-                is_root_path,
+                Level.INFO,
+                f"{actual['full_path']} {key}={actual[key]}",
             )
         else:
-            print_check_info(
-                f"mountcheck WARNING {actual['full_path']} {key} mismatch! expected={expected[key]} actual={actual[key]}",
+            print_check(
                 verbosity,
-                is_root_path,
+                Level.WARNING,
+                f"{actual['full_path']} {key} mismatch! expected={expected[key]} actual={actual[key]}",
             )
 
         if expected["type"] == "dir":
             if expected["num_files"] == actual["num_files"]:
-                print_check_info(
-                    f"mountcheck OK {actual['full_path']} {actual['num_files']} files",
+                print_check(
                     verbosity,
-                    is_root_path,
+                    Level.INFO,
+                    f"{actual['full_path']} {actual['num_files']} files",
                 )
             else:
-                print_check_info(
-                    f"mountcheck WARNING {actual['full_path']} num files mismatch! expected={expected['num_files']} actual={actual['num_files']}",
+                print_check(
                     verbosity,
-                    is_root_path,
+                    Level.WARNING,
+                    f"{actual['full_path']} num files mismatch! expected={expected['num_files']} actual={actual['num_files']}",
                 )
 
 
@@ -310,8 +327,11 @@ if __name__ == "__main__":
         help="""
         Verbosity level.
         If 0, prints nothing.
-        If 1, prints root paths check info only.
-        If 2, prints everything.
+        If 1, prints warnings.
+        If 2, prints warnings and info messages.
         """,
     )
-    main(args=parser.parse_args())
+    try:
+        main(args=parser.parse_args())
+    except (OSError, RuntimeError) as exc:
+        parser.exit(1, f"mountcheck ERROR {exc}\n")
