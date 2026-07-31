@@ -53,7 +53,6 @@ LOCAL_RANK / MASTER_ADDR are set:
 import argparse
 import os
 import queue
-import socket
 import sys
 import threading
 import time
@@ -151,55 +150,60 @@ def pinned_aligned(nbytes, alignment):
 
 
 class Topology:
-    """Rank/node layout and the per-LOCAL_RANK process groups."""
+    """Rank/node layout and the per-LOCAL_RANK process groups.
+
+    Ranks are laid out in slurm's default block distribution: node `i` holds
+    ranks `i*L` through `i*L + L - 1`, so a rank's node is `RANK // L` and its
+    position on that node is `RANK % L`.  That is arithmetic, not a discovery
+    problem, and it needs no collective to work out.
+
+    The one thing worth checking is that the assumption holds, and slurm hands
+    us everything needed to check it locally: RANK is SLURM_PROCID and
+    LOCAL_RANK is SLURM_LOCALID, two independently reported numbers that agree
+    only under a block distribution.  Comparing them costs a modulo on each
+    rank and no communication, and turns a launch this code cannot handle --
+    `--distribution=cyclic` or `=arbitrary`, or a ragged --ntasks-per-node --
+    into an immediate error on the ranks affected, instead of groups whose
+    all-gather assembles the right bytes in the wrong order.
+    """
 
     def __init__(self):
         self.rank = int(os.environ["RANK"])
         self.world_size = int(os.environ["WORLD_SIZE"])
         self.local_rank = int(os.environ["LOCAL_RANK"])
-        self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+        self.local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
 
-        # Derive the node layout from what the ranks actually report rather
-        # than assuming a block distribution of RANK: run.sub launches some
-        # steps with --distribution=arbitrary, and silently mis-grouping would
-        # produce a corrupt copy rather than an error.
-        identities = [None] * self.world_size
-        dist.all_gather_object(identities, (socket.gethostname(), self.local_rank))
+        L = self.local_world_size
+        if L < 1:
+            raise RuntimeError(f"LOCAL_WORLD_SIZE={L} must be at least 1")
+        if self.world_size % L:
+            raise RuntimeError(
+                f"WORLD_SIZE={self.world_size} is not a multiple of "
+                f"LOCAL_WORLD_SIZE={L}; launch with a uniform --ntasks-per-node"
+            )
+        if self.rank % L != self.local_rank:
+            raise RuntimeError(
+                f"rank {self.rank} reports LOCAL_RANK={self.local_rank}, but a "
+                f"block distribution of {L} ranks per node puts it at "
+                f"{self.rank % L}; datastage needs slurm's default block "
+                "distribution (no --distribution=cyclic or =arbitrary)"
+            )
 
-        hosts = []
-        for host, _ in identities:
-            if host not in hosts:
-                hosts.append(host)
-        self.node_count = len(hosts)
-        node_index = {host: i for i, host in enumerate(hosts)}
+        self.node_count = self.world_size // L
+        self.node_index = self.rank // L
 
-        # group_ranks[l][node] = global rank of LOCAL_RANK l on that node
-        group_ranks = [[None] * self.node_count for _ in range(self.local_world_size)]
-        for global_rank, (host, local_rank) in enumerate(identities):
-            if local_rank >= self.local_world_size:
-                raise RuntimeError(
-                    f"rank {global_rank} reports LOCAL_RANK={local_rank} with "
-                    f"LOCAL_WORLD_SIZE={self.local_world_size}"
-                )
-            slot = group_ranks[local_rank][node_index[host]]
-            if slot is not None:
-                raise RuntimeError(
-                    f"ranks {slot} and {global_rank} both claim LOCAL_RANK="
-                    f"{local_rank} on {host}"
-                )
-            group_ranks[local_rank][node_index[host]] = global_rank
-        for local_rank, ranks in enumerate(group_ranks):
-            if any(r is None for r in ranks):
-                raise RuntimeError(
-                    f"not every node has a rank with LOCAL_RANK={local_rank}; "
-                    "launch with a uniform --ntasks-per-node"
-                )
+        # group_ranks[l][node] = global rank of LOCAL_RANK l on that node.
+        # Ascending by construction, which matters: dist.new_group sorts the
+        # list it is given and derives each member's position in the group from
+        # that order, and the drainer maps all-gather output position to
+        # node_index.  Those agree only while this stays sorted.
+        group_ranks = [[node * L + l for node in range(self.node_count)]
+                       for l in range(L)]
 
         # new_group is collective: every rank creates every group, in the same
         # order, but only ever uses its own.
         self.groups = [dist.new_group(ranks) for ranks in group_ranks]
         self.group = self.groups[self.local_rank]
-        self.node_index = node_index[socket.gethostname()]
 
     def describe(self):
         return (

@@ -21,9 +21,9 @@ Consequences:
 * **F2 is demoted** from live corruption to latent fragility — its repro needs a
   non-ascending `group_ranks[l]`, which block/cyclic distribution never
   produces. Worth an assert, not a panic.
-* `Topology`'s `all_gather_object` hostname derivation exists to serve this
-  non-requirement. Simplifying it is open for discussion; it is not in scope of
-  any finding below.
+* `Topology`'s `all_gather_object` hostname derivation existed only to serve
+  this non-requirement. **Removed 2026-07-31** in favour of block-distribution
+  arithmetic with a local consistency check — see F2.
 * `CLAUDE.md` stated the arbitrary-distribution rationale as a design invariant.
   Corrected in the same change that created this file.
 
@@ -63,7 +63,7 @@ Consequences:
   threads agree on which device they are on, not CUDA ordering semantics. Worth
   a multi-GPU confirmation run when a node is free.
 
-- [ ] **F2 · `mlperf_common/fileio/datastage.py:199` · new_group sorts its rank list** *(demoted — see premise correction)*
+- [x] **F2 · `mlperf_common/fileio/datastage.py:199` · new_group sorts its rank list** — resolved by simplifying `Topology`
 
   `dist.new_group` does `ranks = sorted(ranks)` then
   `group_rank = ranks.index(global_rank)`, so a member's group rank is its
@@ -75,8 +75,21 @@ Consequences:
   only supported case. Under a hypothetical `A B B A` layout `group_ranks[1] =
   [3, 2]` sorts to `[2, 3]` and two nodes' sub-shards swap.
 
-  Recommended: assert `group_ranks[l] == sorted(group_ranks[l])` and fail loudly,
-  rather than carrying the machinery that pretends to handle the general case.
+  **Resolved (2026-07-31) by deleting the machinery.** `Topology` now computes
+  the layout from slurm's default block distribution — node `i` holds ranks
+  `i*L .. i*L+L-1` — so `group_ranks[l]` is `[node*L + l for node in ...]`,
+  ascending by construction, and `new_group`'s sort is provably a no-op. The
+  `all_gather_object` hostname discovery and the `socket` import are gone.
+
+  The assumption is verified rather than assumed, locally and for free: slurm
+  reports RANK (`SLURM_PROCID`) and LOCAL_RANK (`SLURM_LOCALID`) independently,
+  and they agree only under a block distribution, so `rank % L != local_rank`
+  rejects cyclic and arbitrary launches on the affected ranks with no
+  collective. `LOCAL_WORLD_SIZE` is now required rather than defaulting to 1,
+  which used to turn one 8-GPU node into eight single-rank "nodes".
+
+  `tests/test_topology.py` covers six layouts, confirmed able to go red by
+  reintroducing a mis-grouping.
 
 ## Tier 2 — silent data loss / job hangs
 
@@ -353,7 +366,7 @@ Consequences:
   multi-node case. Instrumentation shows the threaded branch is entered exactly
   once in the whole suite, in a case whose result is discarded.
 
-- [ ] **F15 · `tests/stubs.py:106` · stubs can't construct `Topology` or `build_plan`**
+- [x] **F15 · `tests/stubs.py:106` · stubs can't construct `Topology` or `build_plan`** — resolved
 
   `install()` defines only barrier/get_rank/broadcast_object_list/all_reduce/
   all_gather_into_tensor. `ds.Topology` raises AttributeError on
@@ -365,6 +378,15 @@ Consequences:
   Note `tests/README.md` tells you to validate pipeline changes by reintroducing
   a bug and confirming red. Per F14 that instruction does not currently hold for
   the multi-node path.
+
+  **Resolved (2026-07-31), largely by deleting the untestable parts.**
+  `all_gather_object` is gone from `Topology` (F2) and `torch.tensor` is gone
+  from `build_plan` (F16), so the two blockers stopped existing. `new_group` is
+  now stubbed, returning its rank list so a test can inspect it. Both functions
+  have direct tests: `test_topology.py` and `test_buildplan.py`. The hand-rolled
+  `Topology` classes in `test_layout.py` and `test_pipeline.py` remain, and are
+  fine — they parameterise `node_count` directly, which is what those tests
+  need; the real one is exercised on its own.
 
 ---
 

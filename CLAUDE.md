@@ -87,14 +87,26 @@ whole job. With W ranks = N nodes × L ranks/node:
 * Result: W disjoint readers on the shared FS, one fabric crossing per byte per
   node, L concurrent all-gathers.
 
-`Topology` derives node grouping from what ranks actually report via
-`all_gather_object` rather than assuming RANK is block-distributed. Its comments
-justify this by the need to support `srun --distribution=arbitrary` — **that is
-not a real requirement.** It was a mistake by the original author of the C
-version, carried into the Python port unexamined. Ranks are block- or
-cyclic-distributed in every supported launch. Do not add complexity to serve the
-arbitrary case, and treat the existing hostname-derivation machinery as open to
-simplification rather than as an invariant to preserve. `FileLayout` keeps every offset and length aligned
+`Topology` assumes **slurm's default block distribution**: node `i` holds ranks
+`i*L .. i*L+L-1`, so a rank's node is `RANK // L` and its slot is `RANK % L`.
+That is arithmetic, requiring no collective. It verifies the assumption locally
+— slurm reports RANK (`SLURM_PROCID`) and LOCAL_RANK (`SLURM_LOCALID`)
+independently, and they agree only under a block distribution, so a modulo
+comparison on each rank rejects `--distribution=cyclic`/`=arbitrary` and ragged
+`--ntasks-per-node` immediately.
+
+An earlier version derived the layout from gathered hostnames to support
+`--distribution=arbitrary`. That was never a real requirement — a mistake
+carried over from the C version — and it could not have worked anyway, since
+`MASTER_ADDR` is the first node in the nodelist and rank 0 must be there. Don't
+reintroduce discovery here.
+
+`group_ranks[l]` must stay **ascending**: `dist.new_group` sorts the list it is
+given and derives each member's group position from that order, while the
+drainer maps all-gather output position to `node_index`. Those agree only while
+the lists are sorted. `tests/test_topology.py` checks it.
+
+`FileLayout` keeps every offset and length aligned
 *except* the final range of the final slice, so O_DIRECT write padding can only
 ever run off the end of the file, where a closing `ftruncate` trims it.
 

@@ -220,6 +220,11 @@ def install(total_memory=288 * 1024 ** 3):
         get_device_properties=lambda device: types.SimpleNamespace(
             total_memory=total_memory),
     )
+    # Returns the rank list itself as the group handle, so a test can see which
+    # ranks a group was built from.  Real new_group is collective and sorts its
+    # argument; Topology depends on already handing it a sorted list, and
+    # test_topology.py checks that.
+    dist.new_group = lambda ranks: list(ranks)
     dist.barrier = lambda *args, **kwargs: None
     dist.get_rank = lambda: 0
     dist.broadcast_object_list = lambda payload, src=0: None
