@@ -310,8 +310,11 @@ Consequences:
 - [x] **F16 · `mlperf_common/fileio/datastage.py` · the cross-rank source check was a metadata storm** — removed
 
   `build_plan` had every rank stat every file and all-reduce a mismatch count,
-  to catch ranks seeing a different view of shared storage. That is `W × F`
-  stats issued as a synchronised burst: 5.1M at 64 nodes / 10k files, 41M at
+  to catch ranks seeing a different view of shared storage. That is one stat
+  per rank per file — `W × F`, where W is the world size (one rank per GPU, so
+  nodes × 8) and F is the number of files, matching the W/L/N notation in
+  `datastage.py`'s module docstring — issued as a synchronised burst: 5.1M at
+  64 nodes / 10k files, 41M at
   512 nodes, 1.6 **billion** at 2048 nodes / 100k files. At a generous 50k
   ops/s for one MDT that is ~14 minutes of pure metadata at 512 nodes before a
   byte moves, and at 2048 it takes the MDT down for every other job on the
@@ -334,8 +337,9 @@ Consequences:
   `torch.tensor`, `FakeCounter` and `dist.all_reduce` left the stubs with it.
 
   Worth noting the review did not find this — 49 agents, none reasoning about
-  filesystem load. Staging still does `W × F` opens, which is inherent to
-  having W disjoint readers; this was pure addition on top.
+  filesystem load. Staging still opens every file on every rank — `W × F`
+  again — which is inherent to having W disjoint readers; this check was pure
+  addition on top of that.
 
 ## Tier 4 — the tests can't catch the above
 
