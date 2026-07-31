@@ -63,7 +63,8 @@ import torch
 import torch.distributed as dist
 
 from mlperf_common.fileio import direct_io
-from mlperf_common.fileio.copyplan import UnreadableEntries, plan_copy_operations
+from mlperf_common.fileio.copyplan import (
+    CopyArgumentError, UnreadableEntries, plan_copy_operations, validate_copy_args)
 
 # Buffer alignment.  2 MiB is the Linux huge page size, comfortably above any
 # filesystem block size we will meet, so O_DIRECT is always happy.  Same
@@ -677,11 +678,16 @@ def parse_args(argv=None):
         args.buffer_size = align_up(args.buffer_size, BUFFER_ALIGN)
         print(f"{prog}: rounding buffer size up to {args.buffer_size >> 20} MiB",
               file=sys.stderr)
-    for src in args.sources:
-        if not os.path.exists(src):
-            sys.exit(f"{prog}: cannot stat '{src}': No such file or directory")
-        if os.path.isdir(src) and not args.recursive:
-            sys.exit(f"{prog}: -r not specified; omitting directory '{src}'")
+    # Shared with fastcp, and applied here rather than in build_plan because
+    # parse_args runs on every rank before the process group exists: a bad
+    # invocation has to kill the whole job uniformly, not leave rank 0 exiting
+    # while its peers block in a collective.
+    try:
+        validate_copy_args(args.sources, args.destination,
+                           recursive=args.recursive,
+                           into_directory=bool(args.target_directory))
+    except CopyArgumentError as exc:
+        sys.exit(f"{prog}: {exc}")
     return args
 
 

@@ -108,7 +108,7 @@ Consequences:
   verifies its own premise and skips if run as a user who can list a 0o000
   directory, rather than passing vacuously.
 
-- [ ] **F4 · `mlperf_common/fileio/datastage.py:649` · no destination-is-a-directory check**
+- [x] **F4 · `mlperf_common/fileio/datastage.py:649` · no destination-is-a-directory check** — fixed, see "F4 fix" below
 
   `parse_args` validates sources but never checks the destination.
   `plan_copy_operations` (copyplan.py:112) silently falls back to a single-file
@@ -121,8 +121,40 @@ Consequences:
   block in the collective until the watchdog fires. With multiple sources,
   `sources[1:]` are dropped with no message and the job exits 0.
 
-  `client/fastcp` blocks both cases at `parse_and_validate_args:172-179`.
-  Port that check.
+  **The review was wrong about fastcp.** It claimed fastcp blocks both cases.
+  It blocks the multi-source one, and correctly *permits* `-r src newdir` —
+  which GNU cp permits too. The planner then mis-plans that permitted case, so
+  `fastcp -r src newdir` was broken in the same way. Verified against real `cp`:
+
+  | invocation | cp |
+  | --- | --- |
+  | `cp -r src newdir` (absent) | legal — contents land directly in `newdir` |
+  | `cp f1 f2 nodir` (absent) | `target 'nodir': No such file or directory` |
+  | `cp -r src f1` (a file) | `cannot overwrite non-directory ...` |
+
+  The real defect was architectural: the refactor moved *planning* into
+  copyplan and left *validation* in fastcp's CLI, and the planner's docstring
+  stated its `not isdir(dst)` fallback as a fact when it was a precondition the
+  caller had to establish. datastage was the first caller to arrive without
+  that knowledge.
+
+  **F4 fix (2026-07-31).** `copyplan.validate_copy_args` (+ `CopyArgumentError`)
+  now owns the cp argument rules, and `plan_copy_operations` applies them itself
+  so no caller can skip them. The planner handles `cp -r src newdir` properly:
+  a directory source with a non-directory destination copies its *contents*
+  under the destination, with no basename level.
+
+  fastcp's destination block is deleted in favour of the shared call, and
+  datastage's `parse_args` gained the same call — deliberately there rather than
+  in `build_plan`, since parse_args runs on every rank before the process group
+  exists, so a bad invocation kills the job uniformly instead of leaving rank 0
+  exiting while peers block (which is F5's failure mode).
+
+  fastmd5 is unaffected: read-only, no destination.
+
+  All six cp cases are pinned in `tests/test_copyplan.py`, and both CLIs were
+  exercised end to end — fastcp copying real bytes, datastage's parse_args via
+  the stub harness — with error text matching cp's wording.
 
 - [ ] **F5 · `mlperf_common/fileio/datastage.py:572` · unguarded os.stat before the broadcast**
 

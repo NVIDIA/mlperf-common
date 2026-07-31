@@ -49,6 +49,73 @@ def build_tree(root):
     os.symlink("realdir", os.path.join(root, "link_to_dir"))
 
 
+def check_cp_semantics(root):
+    """The SOURCE/DEST rules, against what GNU cp actually does.
+
+    fastcp was written to match cp, and datastage inherits the mapping through
+    this module, so these are the cases where "what does copy mean here" has to
+    have exactly one answer.  The rows marked ERROR are the ones cp refuses.
+    """
+    base = os.path.join(root, "sem")
+    src = os.path.join(base, "src")
+    os.makedirs(os.path.join(src, "sub"))
+    for path in ("a.bin", "sub/b.bin"):
+        with open(os.path.join(src, path), "wb") as handle:
+            handle.write(b"x" * 10)
+    for name in ("f1", "f2"):
+        with open(os.path.join(base, name), "wb") as handle:
+            handle.write(b"y" * 10)
+    existing = os.path.join(base, "existingdir")
+    os.makedirs(existing)
+
+    f1, f2 = os.path.join(base, "f1"), os.path.join(base, "f2")
+    absent = os.path.join(base, "newdir")
+
+    def plan(sources, destination, **kwargs):
+        jobs = copyplan.plan_copy_operations(sources, destination, **kwargs)
+        return sorted(os.path.relpath(dst, base) for _, dst, _ in jobs)
+
+    # cp -r src newdir, newdir absent: the contents land directly in newdir,
+    # with no basename level.  This is the case that used to plan a single
+    # 4 KiB "copy the directory as a file" job.
+    check("cp -r src newdir puts contents directly under newdir",
+          plan([src], absent) == ["newdir/a.bin", "newdir/sub/b.bin"],
+          f"got {plan([src], absent)}")
+
+    # cp -r src existingdir: basename level is kept.
+    check("cp -r src existingdir keeps the basename level",
+          plan([src], existing) == ["existingdir/src/a.bin",
+                                    "existingdir/src/sub/b.bin"],
+          f"got {plan([src], existing)}")
+
+    check("cp a b existingdir places both under it",
+          plan([f1, f2], existing) == ["existingdir/f1", "existingdir/f2"])
+
+    check("cp a newname renames a single file",
+          plan([f1], os.path.join(base, "renamed.bin")) == ["renamed.bin"])
+
+    for name, sources, destination, kwargs in (
+            ("cp a b newdir is refused when newdir is absent", [f1, f2], absent, {}),
+            ("cp -r src file is refused", [src], f1, {}),
+            ("cp -t newdir src is refused when newdir is absent",
+             [src], absent, {"into_directory": True}),
+            ("a directory source without -r is refused",
+             [src], existing, {"recursive": False}),
+    ):
+        try:
+            copyplan.validate_copy_args(sources, destination, **kwargs)
+            check(name, False, "no exception raised")
+        except copyplan.CopyArgumentError:
+            check(name, True)
+
+    # The planner must not depend on its caller having validated first.
+    try:
+        copyplan.plan_copy_operations([f1, f2], absent)
+        check("planning applies the rules itself", False, "no exception raised")
+    except copyplan.CopyArgumentError:
+        check("planning applies the rules itself", True)
+
+
 def check_unlistable_directory(root):
     """A subtree we cannot list must be reported, not quietly left out.
 
@@ -149,6 +216,7 @@ def main():
         except copyplan.UnreadableEntries:
             check("planning refuses an unreadable tree", True)
 
+        check_cp_semantics(root)
         check_unlistable_directory(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)

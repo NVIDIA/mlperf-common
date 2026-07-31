@@ -32,7 +32,8 @@ sys.path.insert(1, os.path.join(_HERE, os.pardir))
 import direct_io
 
 try:
-    from mlperf_common.fileio.copyplan import UnreadableEntries, plan_copy_operations
+    from mlperf_common.fileio.copyplan import (
+        CopyArgumentError, UnreadableEntries, plan_copy_operations, validate_copy_args)
 except ImportError as exc:
     sys.exit(
         f"fastcp: cannot import mlperf_common ({exc}).\n"
@@ -162,21 +163,14 @@ def parse_and_validate_args():
         # usually meant that to be the source file name, and forgot to give a target
         parser.error(f"{prog_name}: missing destination file operand after '{args.destination}'")
 
-    # Validate sources
-    for src in args.sources:
-        if not os.path.exists(src):
-            sys.exit(f"{prog_name}: cannot stat '{src}': No such file or directory")
-        if os.path.isdir(src) and not args.recursive:
-            sys.exit(f"{prog_name}: -r not specified; omitting directory '{src}'")
-
-    # Validate destination
-    if args.target_directory or len(args.sources) > 1:
-        if not os.path.exists(args.destination) or not os.path.isdir(args.destination):
-            sys.exit(f"{prog_name}: target '{args.destination}' is not a directory")
-    else:
-        if os.path.exists(args.destination) and os.path.isfile(args.destination):
-            if os.path.isdir(args.sources[0]):  # Only valid if both are files
-                sys.exit(f"{prog_name}: cannot overwrite '{args.destination}' with directory '{args.sources[0]}'")
+    # The cp argument rules live in copyplan, next to the mapping they make
+    # well defined, so that fastcp and datastage cannot drift apart on them.
+    try:
+        validate_copy_args(args.sources, args.destination,
+                           recursive=args.recursive,
+                           into_directory=bool(args.target_directory))
+    except CopyArgumentError as exc:
+        sys.exit(f"{prog_name}: {exc}")
 
     return args
 

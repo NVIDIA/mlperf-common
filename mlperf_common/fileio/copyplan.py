@@ -20,11 +20,26 @@ Both tools take the same cp/rsync-shaped arguments and need the same answer:
 given SOURCE(s) and a DEST, which files get copied where.  Keeping that in one
 place means the single-node and the collective stager can never disagree about
 what "copy this directory" means.
+
+The argument rules live here too, in validate_copy_args, rather than in each
+tool's CLI.  They are not decoration: the mapping below is only well defined
+once they hold, and a caller that skipped them used to get a silently wrong
+plan instead of an error.  plan_copy_operations therefore applies them itself,
+and the CLIs call them early only to fail before doing any other setup.
+
+The semantics are GNU cp's, which is what fastcp set out to match:
+
+    cp -r src newdir      newdir absent -> create it, src's *contents* inside
+    cp -r src existingdir                -> existingdir/src/...
+    cp a b existingdir                   -> existingdir/a, existingdir/b
+    cp a b newdir         newdir absent -> error, target is not a directory
+    cp -r src file                       -> error, cannot overwrite non-directory
 """
 
 import os
 
-__all__ = ["UnreadableEntries", "list_relative_files", "plan_copy_operations"]
+__all__ = ["CopyArgumentError", "UnreadableEntries", "list_relative_files",
+           "plan_copy_operations", "validate_copy_args"]
 
 # How many bad paths to name before summarising the rest.
 _MAX_REPORTED = 20
@@ -52,6 +67,48 @@ class UnreadableEntries(Exception):
         if count > _MAX_REPORTED:
             lines.append(f"    ... and {count - _MAX_REPORTED} more")
         return "\n".join(lines)
+
+
+class CopyArgumentError(Exception):
+    """The SOURCE/DEST combination is not one cp would accept.
+
+    Carries a message in cp's wording, without a program name; callers prefix
+    their own, as cp does.
+    """
+
+
+def validate_copy_args(sources, destination, recursive=True, into_directory=False):
+    """Check a SOURCE(s)/DEST combination, raising CopyArgumentError if bad.
+
+    `recursive` is the caller's -r flag and `into_directory` its -t.  Both only
+    tighten the check, so plan_copy_operations can re-apply this with the
+    defaults on arguments a CLI has already accepted and never disagree.
+    """
+    if not sources:
+        raise CopyArgumentError(
+            f"missing destination file operand after '{destination}'")
+
+    for src in sources:
+        if not os.path.exists(src):
+            raise CopyArgumentError(f"cannot stat '{src}': No such file or directory")
+        if os.path.isdir(src) and not recursive:
+            raise CopyArgumentError(f"-r not specified; omitting directory '{src}'")
+
+    if os.path.isdir(destination):
+        return
+
+    # Not a directory, so there is nowhere to put a second source, and no
+    # basename to place anything under.  -t says the destination is meant to be
+    # a directory to copy into, so it has to already be one.
+    if into_directory or len(sources) > 1:
+        if os.path.exists(destination):
+            raise CopyArgumentError(f"target '{destination}' is not a directory")
+        raise CopyArgumentError(f"target '{destination}': No such file or directory")
+
+    if os.path.exists(destination) and os.path.isdir(sources[0]):
+        raise CopyArgumentError(
+            f"cannot overwrite non-directory '{destination}' "
+            f"with directory '{sources[0]}'")
 
 
 def _stat_or_problem(path, problems):
@@ -105,13 +162,19 @@ def plan_copy_operations(sources, destination):
     """Return a list of (src_abs, dst_abs, size_bytes) tuples to copy.
 
     If `destination` is an existing directory each source is placed inside it
-    under its own basename (recursing into directories); otherwise this is a
-    single file-to-file copy.  The result is sorted by destination path so that
-    every rank of a collective copy walks the files in the same order.
+    under its own basename (recursing into directories).  Otherwise there is
+    exactly one source and `destination` names it directly: a file is copied to
+    that name, and a directory has its *contents* copied in under it, which is
+    what `cp -r src newdir` does when newdir does not yet exist.  The result is
+    sorted by destination path so that every rank of a collective copy walks
+    the files in the same order.
 
-    Raises UnreadableEntries if any source cannot be stat'd, reporting all of
-    them together.
+    Raises CopyArgumentError if the arguments are not a combination cp would
+    accept, and UnreadableEntries if any source cannot be stat'd or any
+    directory under it cannot be listed, reporting all of them together.
     """
+    validate_copy_args(sources, destination)
+
     file_jobs = []
     problems = []
     dst_root = os.path.abspath(destination)
@@ -121,8 +184,20 @@ def plan_copy_operations(sources, destination):
         if st is not None:
             file_jobs.append((src_abs, dst_abs, st.st_size))
 
-    if not os.path.isdir(dst_root):  # case 1: single file copy
-        add(os.path.abspath(sources[0]), dst_root)
+    if not os.path.isdir(dst_root):
+        # Validation has established there is exactly one source and, if it is
+        # a directory, that nothing is in the way.  `destination` *is* the
+        # copy, so a directory's contents go directly under it -- no basename
+        # level, which is where cp -r and cp differ.
+        src_abs = os.path.abspath(sources[0])
+        if os.path.isdir(src_abs):
+            try:
+                for relpath in list_relative_files(src_abs):
+                    add(os.path.join(src_abs, relpath), os.path.join(dst_root, relpath))
+            except UnreadableEntries as exc:
+                problems.extend(exc.entries)
+        else:
+            add(src_abs, dst_root)
     else:
         for src in sources:
             src_abs = os.path.abspath(src)
