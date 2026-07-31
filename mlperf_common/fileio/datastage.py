@@ -289,8 +289,21 @@ class Stager:
         device_bytes = self.piece + RECV_DEV_SLOTS * window
         budget = int(torch.cuda.get_device_properties(self.device).total_memory * 0.60)
         if device_bytes > budget:
-            per_window = max(align_down(budget // (RECV_DEV_SLOTS * topology.node_count),
-                                        self.align), self.align)
+            # device_bytes is piece * (RECV_DEV_SLOTS * node_count + 1) -- the
+            # send buffer is the +1.  Dividing by RECV_DEV_SLOTS * node_count
+            # drops it and suggests a size that is itself over budget, so the
+            # advice reproduces the error it came with.
+            per_rank = align_down(
+                budget // (RECV_DEV_SLOTS * topology.node_count + 1), self.align)
+            if per_rank < self.align:
+                raise RuntimeError(
+                    f"{topology.node_count} nodes need "
+                    f"{self.align * (RECV_DEV_SLOTS * topology.node_count + 1) / 1024 ** 3:.1f} "
+                    f"GiB of device memory even at the {self.align >> 20} MiB minimum "
+                    f"--buffer-size, over the {budget / 1024 ** 3:.1f} GiB budget. "
+                    "This node count does not fit on this GPU."
+                )
+            per_window = per_rank
             raise RuntimeError(
                 f"--buffer-size {self.piece >> 20}M across {topology.node_count} nodes "
                 f"needs {device_bytes / 1024 ** 3:.1f} GiB of device memory, over the "
@@ -361,8 +374,29 @@ class Stager:
         return direct_io.pwrite(fd, mview[base:base + stride], length, offset, block_size)
 
     def stage_file(self, src, dst, size, mtime_ns):
-        topo = self.topo
         tmp = f"{dst}.datastage.tmp.{os.environ.get('SLURM_JOB_ID', 'nojob')}"
+        try:
+            self._stage_to_temp(src, tmp, size, mtime_ns, dst)
+        except BaseException:
+            # The temp file is preallocated to the full source size, and only
+            # the success path's rename ever removed it, so a failed copy left
+            # a near-full file on node-local scratch -- one per attempt, since
+            # the name is scoped to the job id, until a resubmit loop filled
+            # the NVMe and started failing for a different reason.
+            #
+            # Any rank that raises unlinks it.  Peers still hold it open, but
+            # POSIX keeps the inode alive until they close, so the space comes
+            # back when they die; and the rename that would have published it
+            # is not going to happen now anyway.  Ranks parked in a collective
+            # never reach this, which is what the NCCL watchdog is for.
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _stage_to_temp(self, src, tmp, size, mtime_ns, dst):
+        topo = self.topo
 
         # One rank per node creates the file, so the others can open it without
         # racing on O_CREAT and without truncating each other's writes.
@@ -430,7 +464,14 @@ class Stager:
                 os.chmod(path, self.args.chmod)
             except OSError:
                 break
-            path = os.path.dirname(path)
+            parent = os.path.dirname(path)
+            if parent == path:
+                # dirname("/") is "/", so a destination root of "/" would
+                # otherwise satisfy the loop condition forever -- chmod'ing the
+                # container root while every peer waits in the barrier below,
+                # until the job hits its wall clock.
+                break
+            path = parent
 
     def _run_pipeline(self, fd_src, fd_dst, layout, src_block, dst_block):
         topo = self.topo

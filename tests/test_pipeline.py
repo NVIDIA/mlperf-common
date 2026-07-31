@@ -143,6 +143,56 @@ def stage_once(root, nodes, buffer_size, size, tag):
     return problems
 
 
+def stage_failure_leaves_nothing(root):
+    """A failed copy must not leave its preallocated temp file behind.
+
+    The temp file is ftruncate'd to the full source size before any data is
+    written, and only the success path's rename ever removed it -- so a failure
+    used to leave a near-full copy on node-local scratch, one per attempt,
+    until a resubmit loop against a flaky fabric filled the NVMe.
+    """
+    src = os.path.join(root, "src_fail")
+    dst = os.path.join(root, "dst_fail")
+    size = 5 * MiB
+    with open(src, "wb") as handle:
+        handle.write(b"z" * size)
+
+    def temps():
+        return [n for n in os.listdir(root) if ".datastage.tmp." in n]
+
+    # Recorded from inside the failure, so a test that stopped reaching the
+    # temp file at all would show up as a failure rather than a pass.
+    existed = []
+
+    def boom(*args, **kwargs):
+        existed.extend(temps())
+        raise RuntimeError("injected failure")
+
+    STATE["nodes"] = 1
+    STATE["fd"] = os.open(src, os.O_RDONLY)
+    real_pipeline = ds.Stager._run_pipeline
+    ds.Stager._run_pipeline = boom
+    problems = []
+    try:
+        stager = ds.Stager(Args(root, 2 * MiB), Topology(1))
+        try:
+            stager.stage_file(src, dst, size, os.stat(src).st_mtime_ns)
+            problems.append("stage_file did not raise")
+        except RuntimeError:
+            pass
+    finally:
+        ds.Stager._run_pipeline = real_pipeline
+        os.close(STATE["fd"])
+
+    if not existed:
+        problems.append("the temp file was never created; test proves nothing")
+    if temps():
+        problems.append(f"left {temps()}")
+    if os.path.exists(dst):
+        problems.append("published a destination despite failing")
+    return problems
+
+
 def main():
     root = tempfile.mkdtemp(prefix="datastage-")
     failures = 0
@@ -167,6 +217,13 @@ def main():
                 failures += 1
                 print(f"  FAIL nodes={nodes} -b={buffer_size >> 20}M size={size}: "
                       f"{'; '.join(problems)}")
+
+        dist.all_gather_into_tensor = lambda out, inp, group=None: out.copy_(inp)
+        checked += 1
+        problems = stage_failure_leaves_nothing(root)
+        if problems:
+            failures += 1
+            print(f"  FAIL cleanup after a failed copy: {'; '.join(problems)}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

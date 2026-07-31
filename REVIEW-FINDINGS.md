@@ -235,11 +235,17 @@ Consequences:
   `(st_dev, st_ino)`), which also removes the duplicates. Documented in the
   `list_relative_files` docstring.
 
-- [ ] **F7 · `mlperf_common/fileio/datastage.py:406` · `_chmod_parents` infinite loop on `/`**
+- [x] **F7 · `mlperf_common/fileio/datastage.py:406` · `_chmod_parents` infinite loop on `/`** — fixed
 
   `datastage a.bin /` makes `dest_root == "/"`; `os.path.dirname("/") == "/"`, so
   the loop never terminates, chmod'ing `/` forever while peers block in the
   following barrier. Hangs to wall-clock limit.
+
+  **Fixed (2026-07-31).** Break when `dirname(path) == path`, which is the
+  general "walked off the top of the filesystem" condition rather than a
+  special case for `/`. `tests/test_stager.py` drives `_chmod_parents` against
+  a stub with a call-count ceiling, so a runaway reports as a failure instead
+  of hanging the suite; confirmed red by removing the guard.
 
 - [ ] **F8 · `mlperf_common/fileio/datastage.py:408` · `_chmod_parents` widens pre-existing dirs**
 
@@ -249,7 +255,7 @@ Consequences:
   exists to fix the umask on *directories we created*. Under
   `--container-remap-root` the process is root, so it always succeeds silently.
 
-- [ ] **F9 · `mlperf_common/fileio/datastage.py:343` · `.datastage.tmp` files leak**
+- [x] **F9 · `mlperf_common/fileio/datastage.py:343` · `.datastage.tmp` files leak** — fixed
 
   Preallocated to full source size via `ftruncate`, removed only by the
   success-path `os.rename`. No `unlink` anywhere in the file. Every failure
@@ -257,6 +263,19 @@ Consequences:
   orphans a fresh one until node-local NVMe fills — at which point attempts fail
   with ENOSPC rather than the original error. Tests assert on leftover temp
   files but only exercise the success path.
+
+  **Fixed (2026-07-31).** `stage_file` now wraps the work in `try/except
+  BaseException`, unlinks the temp best-effort, and re-raises; the body moved
+  to `_stage_to_temp`. Any rank that raises does the unlink — peers still hold
+  the file open, but POSIX keeps the inode alive until they close, so the
+  space returns when they die, and the rename that would have published it is
+  not going to happen. Ranks parked in a collective never reach the handler,
+  which is what the NCCL watchdog is for; that residual case is commented.
+
+  `tests/test_pipeline.py` injects a failure into `_run_pipeline` and asserts
+  no temp survives — and records, from inside the failure, that the temp
+  existed at that moment, so the test cannot pass by never creating one.
+  Confirmed red by reverting the unlink.
 
 - [ ] **F10 · `mlperf_common/fileio/datastage.py:537` · all-gather ignores actual round length**
 
@@ -268,7 +287,7 @@ Consequences:
   of fabric traffic plus two world barriers per file — slower than the rsync
   path it replaces.
 
-- [ ] **F11 · `mlperf_common/fileio/datastage.py:277` · memory-budget error suggests an over-budget value**
+- [x] **F11 · `mlperf_common/fileio/datastage.py:277` · memory-budget error suggests an over-budget value** — fixed
 
   Check is `piece * (2N + 1) > budget`; the suggestion divides by `2N`, dropping
   the `+1`. Reproduced at 79.65 GiB / 64 nodes: `-b 512M` rejected with "lower to

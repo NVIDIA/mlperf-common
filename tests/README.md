@@ -24,7 +24,8 @@ would go. No stubs involved.
 | `test_buildplan.py` | rank 0 broadcasts planning failures instead of raising them past its blocked peers |
 | `test_topology.py` | block-distribution grouping: one rank per node per group, ascending, and non-block launches refused |
 | `test_dist_env.py` | SLURM/OMPI → torch `env://` translation, slurm hostlist parsing, and the launches we refuse to guess at |
-| `test_pipeline.py` | `stage_file` end to end: bytes in == bytes out |
+| `test_pipeline.py` | `stage_file` end to end: bytes in == bytes out, and no temp file left after a failure |
+| `test_stager.py` | `_chmod_parents` terminates (including on `/`), and the memory-budget error suggests a size that works |
 | `test_device.py` | events land on this rank's device; the drainer copies on its own stream, ordered behind the collective |
 | `stubs.py` | fake `torch` / `torch.distributed` so the above run on a CPU |
 
