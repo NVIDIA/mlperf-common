@@ -74,10 +74,22 @@ BUFFER_ALIGN = 2 * 1024 * 1024
 # already large enough to saturate a reader.
 MIN_READ_PIECE = 4 * 1024 * 1024
 
-# Pipeline depth.  Send slots let the reader run ahead of the collective;
-# receive slots let the writers drain behind it.
+# Pipeline depth.  Send slots let the reader run ahead of the collective.
 SEND_SLOTS = 3
-RECV_SLOTS = 2
+
+# Assembled windows held on the device.  Two, so the next round's all-gather
+# can run while the previous window is still being copied back.  Device memory
+# is the cheap resource here: this runs as its own job step, before training,
+# and everything is released when the process exits.
+RECV_DEV_SLOTS = 2
+
+# Host staging for the write side.  An assembled window is a concatenation of
+# one segment per node, each bound for a different file offset, so it can be
+# copied back and written a few segments at a time instead of whole.  Keeping
+# this pool small and fixed is what stops pinned host memory -- which is
+# page-locked and reserved up front -- from scaling with the node count.
+CHUNK_TARGET = 64 << 20
+CHUNK_SLOTS = 3
 
 
 def ceil_div(a, b):
@@ -252,28 +264,39 @@ class Stager:
         # job: an all-gather delivers the whole window to every participant.
         self.piece = args.buffer_size
         window = self.piece * topology.node_count
+        # How many segments come back from the device per host staging chunk.
+        self.group_nodes = max(1, min(topology.node_count, CHUNK_TARGET // self.piece))
+        chunk_bytes = self.group_nodes * self.piece
 
-        # Fail before allocating rather than dying inside a CUDA OOM.
-        budget = int(torch.cuda.get_device_properties(self.device).total_memory * 0.25)
-        if window > budget:
+        # Fail before allocating rather than dying inside a CUDA OOM.  Only the
+        # device side scales with the node count now, so this is the check that
+        # matters; 60% leaves room for the NCCL buffers and the CUDA context.
+        device_bytes = self.piece + RECV_DEV_SLOTS * window
+        budget = int(torch.cuda.get_device_properties(self.device).total_memory * 0.60)
+        if device_bytes > budget:
+            per_window = max(align_down(budget // (RECV_DEV_SLOTS * topology.node_count),
+                                        self.align), self.align)
             raise RuntimeError(
                 f"--buffer-size {self.piece >> 20}M across {topology.node_count} nodes "
-                f"needs a {window / 1024 ** 3:.1f} GiB window per rank, over the "
+                f"needs {device_bytes / 1024 ** 3:.1f} GiB of device memory, over the "
                 f"{budget / 1024 ** 3:.1f} GiB budget. Lower --buffer-size to at most "
-                f"{max(align_down(budget // topology.node_count, self.align), self.align) >> 20}M."
+                f"{per_window >> 20}M."
             )
 
         self.send_host = [pinned_aligned(self.piece, self.align) for _ in range(SEND_SLOTS)]
-        self.recv_host = [pinned_aligned(window, self.align) for _ in range(RECV_SLOTS)]
+        self.chunk_host = [pinned_aligned(chunk_bytes, self.align) for _ in range(CHUNK_SLOTS)]
         self.send_dev = torch.empty(self.piece, dtype=torch.uint8, device=self.device)
-        self.recv_dev = torch.empty(window, dtype=torch.uint8, device=self.device)
+        self.recv_dev = [torch.empty(window, dtype=torch.uint8, device=self.device)
+                         for _ in range(RECV_DEV_SLOTS)]
 
         if topology.rank == 0:
-            pinned = SEND_SLOTS * self.piece + RECV_SLOTS * window
+            pinned = SEND_SLOTS * self.piece + CHUNK_SLOTS * chunk_bytes
             print(f"datastage: {self.piece >> 20} MiB per rank per round, "
                   f"{window / 1024 ** 3:.2f} GiB window; per rank "
-                  f"{(self.piece + window) / 1024 ** 3:.2f} GiB device, "
-                  f"{pinned / 1024 ** 3:.2f} GiB pinned host", flush=True)
+                  f"{device_bytes / 1024 ** 3:.2f} GiB device, "
+                  f"{pinned / 1024 ** 3:.2f} GiB pinned host "
+                  f"({self.group_nodes} segments per {chunk_bytes >> 20} MiB chunk)",
+                  flush=True)
 
     def _read_piece(self, fd, mview, offset, length, block_size):
         """Fill mview[:length] from fd at offset, split across reader threads."""
@@ -306,26 +329,14 @@ class Stager:
         for future in futures:
             future.result()
 
-    def _write_segments(self, fd, mview, layout, round_index, block_size, ready):
-        """Scatter one assembled window to its true file offsets.
+    def _write_one(self, ready, fd, mview, base, stride, length, offset, block_size):
+        """Write one segment, once the copy that filled its chunk has landed.
 
-        `ready` is the event marking the end of the device-to-host copy that
-        filled `mview`.  Each writer waits on it rather than the main thread, so
-        the main thread can go on and launch the next round's collective while
-        the copy is still in flight.
+        Waiting here rather than on the draining thread means the next chunk's
+        device-to-host copy can be issued while this one is still being written.
         """
-        def write_one(base, length, offset):
-            ready.synchronize()
-            return direct_io.pwrite(fd, mview[base:base + layout.piece],
-                                    length, offset, block_size)
-
-        futures = []
-        for node in range(self.topo.node_count):
-            offset, length = layout.segment(node, round_index)
-            if length == 0:
-                continue
-            futures.append(self.pool.submit(write_one, node * layout.piece, length, offset))
-        return futures
+        ready.synchronize()
+        return direct_io.pwrite(fd, mview[base:base + stride], length, offset, block_size)
 
     def stage_file(self, src, dst, size, mtime_ns):
         topo = self.topo
@@ -363,6 +374,15 @@ class Stager:
         # Publish only once every rank on every node has written and synced.
         dist.barrier()
         if topo.local_rank == 0:
+            # O_DIRECT writes are padded up to the block size, so the last write
+            # of the file runs past its end.  Trim it back -- after the barrier,
+            # because until then another rank may still be padding.
+            fd = os.open(tmp, os.O_WRONLY)
+            try:
+                os.ftruncate(fd, size)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
             os.utime(tmp, ns=(mtime_ns, mtime_ns))
             os.rename(tmp, dst)
             parent = os.open(os.path.dirname(dst), os.O_RDONLY | os.O_DIRECTORY)
@@ -394,8 +414,12 @@ class Stager:
         topo = self.topo
         free_q = queue.Queue()
         filled_q = queue.Queue()
+        recv_free_q = queue.Queue()
+        drain_q = queue.Queue()
         for slot in range(SEND_SLOTS):
             free_q.put(slot)
+        for slot in range(RECV_DEV_SLOTS):
+            recv_free_q.put(slot)
         failure = []
         stop = threading.Event()
 
@@ -414,14 +438,89 @@ class Stager:
             finally:
                 filled_q.put(None)
 
-        reader_thread = threading.Thread(target=reader, name="datastage-reader")
-        reader_thread.start()
+        def drainer():
+            """Copy assembled windows back a chunk at a time and write them.
 
-        pending = [[] for _ in range(RECV_SLOTS)]
+            Runs off the main thread so that the collective for round k+1 can
+            overlap the copy-back and writes for round k.  A device window is
+            only released once all of its copies have landed; the writes carry
+            on behind that against the host chunk pool.
+            """
+            chunk_pending = [[] for _ in range(CHUNK_SLOTS)]
+            try:  # noqa: PLR1702
+                while True:
+                    item = drain_q.get()
+                    if item is None:
+                        break
+                    dev_slot, round_index, assembled = item
+                    assembled.synchronize()
+                    last_copy = None
+                    for group, first in enumerate(
+                            range(0, topo.node_count, self.group_nodes)):
+                        # Deliberately not `stop`: that only means the main loop
+                        # has stopped feeding us, which is the normal end of a
+                        # file. Windows already queued still have to be written.
+                        if failure:
+                            break
+                        count = min(self.group_nodes, topo.node_count - first)
+                        nbytes = count * layout.piece
+                        chunk = group % CHUNK_SLOTS
+                        for future in chunk_pending[chunk]:
+                            future.result()
+                        chunk_pending[chunk] = []
+
+                        _, chunk_view, chunk_mview = self.chunk_host[chunk]
+                        base = first * layout.piece
+                        chunk_view[:nbytes].copy_(
+                            self.recv_dev[dev_slot][base:base + nbytes], non_blocking=True)
+                        copied = torch.cuda.Event(blocking=True)
+                        copied.record()
+                        last_copy = copied
+
+                        submitted = []
+                        for index in range(count):
+                            offset, length = layout.segment(first + index, round_index)
+                            if length == 0:
+                                continue
+                            submitted.append(self.pool.submit(
+                                self._write_one, copied, fd_dst, chunk_mview,
+                                index * layout.piece, layout.piece, length, offset,
+                                dst_block))
+                        chunk_pending[chunk] = submitted
+
+                    # The device window is reusable once its copies have landed,
+                    # which is well before the writes behind them finish.
+                    if last_copy is not None:
+                        last_copy.synchronize()
+                    recv_free_q.put(dev_slot)
+                for futures in chunk_pending:
+                    for future in futures:
+                        future.result()
+            except BaseException as exc:  # noqa: BLE001 - re-raised on main thread
+                failure.append(exc)
+                stop.set()
+                # Never leave the main thread parked waiting for a window.
+                for _ in range(RECV_DEV_SLOTS):
+                    recv_free_q.put(0)
+            finally:
+                # No write may still be in flight when we return: stage_file
+                # closes the destination fd as soon as _run_pipeline does.
+                for futures in chunk_pending:
+                    for future in futures:
+                        try:
+                            future.result()
+                        except BaseException:  # noqa: BLE001 - already recorded
+                            pass
+
+        reader_thread = threading.Thread(target=reader, name="datastage-reader")
+        drain_thread = threading.Thread(target=drainer, name="datastage-drainer")
+        reader_thread.start()
+        drain_thread.start()
+
         try:
             for round_index in range(layout.rounds):
                 item = filled_q.get()
-                if item is None:
+                if item is None or failure:
                     break
                 _, slot, length = item
 
@@ -434,35 +533,25 @@ class Stager:
                 # queued behind it on the same stream.  Waiting on this one
                 # event, rather than the whole device, is what lets the reader
                 # refill the slot while the collective is still running.
-                dist.all_gather_into_tensor(self.recv_dev, self.send_dev, group=topo.group)
+                dev_slot = recv_free_q.get()
+                dist.all_gather_into_tensor(self.recv_dev[dev_slot], self.send_dev,
+                                            group=topo.group)
+                assembled = torch.cuda.Event(blocking=True)
+                assembled.record()
                 h2d_done.synchronize()
                 free_q.put(slot)
 
-                recv_slot = round_index % RECV_SLOTS
-                for future in pending[recv_slot]:
-                    future.result()
-                pending[recv_slot] = []
-
-                _, recv_view, recv_mview = self.recv_host[recv_slot]
-                recv_view.copy_(self.recv_dev, non_blocking=True)
-                d2h_done = torch.cuda.Event(blocking=True)
-                d2h_done.record()
-
-                # The writers wait on d2h_done themselves, so the main thread
-                # returns to the top of the loop immediately.  recv_dev is safe
-                # to reuse because the next round's collective is queued behind
-                # this copy, and recv_host[recv_slot] is held by the pending
-                # futures checked above.
-                pending[recv_slot] = self._write_segments(
-                    fd_dst, recv_mview, layout, round_index, dst_block, d2h_done
-                )
-            for futures in pending:
-                for future in futures:
-                    future.result()
+                # Hand the window off; the main thread does no host copies and
+                # no writes, so it goes straight back to the next collective.
+                drain_q.put((dev_slot, round_index, assembled))
         finally:
+            # Let the drainer finish the windows already queued before anything
+            # is torn down -- it lags the main loop by design.
+            drain_q.put(None)
+            drain_thread.join()
             # If we left the loop early the reader may be parked on free_q;
-            # release it and let it observe the stop flag. filled_q is
-            # unbounded, so the reader can never block on the other side.
+            # release it and let it observe the stop flag. filled_q and drain_q
+            # are unbounded, so neither thread can block on the other side.
             stop.set()
             for slot in range(SEND_SLOTS):
                 free_q.put(slot)
