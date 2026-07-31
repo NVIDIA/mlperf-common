@@ -70,8 +70,9 @@ def list_relative_files(root):
     symlinks to files appear in filenames, so both are dereferenced and copied
     as content rather than recreated as links.
 
-    Raises UnreadableEntries if anything under root cannot be stat'd, reporting
-    every such entry rather than dying on the first one.
+    Raises UnreadableEntries if anything under root cannot be stat'd, or if a
+    directory under it cannot be listed, reporting every such entry rather than
+    dying on the first one.
 
     FIXME: os.walk(followlinks) doesn't protect against cycles
     to fix this we'd need to write our own version that did a depth-first
@@ -79,7 +80,18 @@ def list_relative_files(root):
     """
     file_list = []
     problems = []
-    for dirpath, _, filenames in os.walk(root, followlinks=True):
+
+    def unlistable(exc):
+        # The one unreadable-entry case with no entry to report: files under a
+        # directory we cannot list never reach the walk at all, so there is
+        # nothing to stat and nothing to collect.  os.walk's default is to
+        # swallow this and carry on, which makes an unlistable subtree
+        # indistinguishable from an empty one -- a partial copy that exits 0,
+        # and, since fastmd5 enumerates through here too, a partial checksum
+        # that agrees with it.
+        problems.append((exc.filename or root, exc.strerror or str(exc)))
+
+    for dirpath, _, filenames in os.walk(root, followlinks=True, onerror=unlistable):
         for fname in filenames:
             full_path = os.path.join(dirpath, fname)
             if _stat_or_problem(full_path, problems) is not None:

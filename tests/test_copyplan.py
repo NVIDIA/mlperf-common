@@ -49,6 +49,58 @@ def build_tree(root):
     os.symlink("realdir", os.path.join(root, "link_to_dir"))
 
 
+def check_unlistable_directory(root):
+    """A subtree we cannot list must be reported, not quietly left out.
+
+    This is the one unreadable-entry case with no entry to report: the files
+    under an unlistable directory never reach the walk, so there is nothing to
+    stat and nothing to collect.  os.walk's default is to swallow the error and
+    carry on, which makes such a subtree indistinguishable from an empty one --
+    a partial copy that exits 0, and a partial checksum that agrees with it.
+    """
+    source = os.path.join(root, "blocked")
+    os.makedirs(os.path.join(source, "readable"))
+    os.makedirs(os.path.join(source, "secret"))
+    for path in ("readable/good.bin", "secret/hidden.bin"):
+        with open(os.path.join(source, path), "wb") as handle:
+            handle.write(b"x" * 10)
+    os.chmod(os.path.join(source, "secret"), 0o000)
+
+    try:
+        # Root ignores the mode bits, so the premise would not hold and the
+        # check below would pass without testing anything.
+        try:
+            os.listdir(os.path.join(source, "secret"))
+        except PermissionError:
+            pass
+        else:
+            check("unlistable directory is reported", True,
+                  "SKIPPED: this user can list a 0o000 directory")
+            return
+
+        try:
+            found = copyplan.list_relative_files(source)
+            check("unlistable directory is reported", False,
+                  f"no exception; returned {found}")
+        except copyplan.UnreadableEntries as exc:
+            check("unlistable directory is reported", True)
+            check("the message names the directory it could not list",
+                  "secret" in str(exc), f"got {exc}")
+
+        # Same hole one level up: the root of the walk itself.
+        os.chmod(source, 0o000)
+        try:
+            found = copyplan.list_relative_files(source)
+            check("unlistable root is reported", False,
+                  f"no exception; returned {found}")
+        except copyplan.UnreadableEntries:
+            check("unlistable root is reported", True)
+    finally:
+        # Otherwise rmtree cannot clean up after us.
+        os.chmod(source, 0o755)
+        os.chmod(os.path.join(source, "secret"), 0o755)
+
+
 def main():
     root = tempfile.mkdtemp(prefix="copyplan-")
     try:
@@ -96,6 +148,8 @@ def main():
             check("planning refuses an unreadable tree", False, "no exception raised")
         except copyplan.UnreadableEntries:
             check("planning refuses an unreadable tree", True)
+
+        check_unlistable_directory(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

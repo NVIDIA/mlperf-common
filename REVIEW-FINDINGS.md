@@ -80,7 +80,7 @@ Consequences:
 
 ## Tier 2 — silent data loss / job hangs
 
-- [ ] **F3 · `mlperf_common/fileio/copyplan.py:82` · os.walk swallows unreadable subtrees**
+- [x] **F3 · `mlperf_common/fileio/copyplan.py:82` · os.walk swallows unreadable subtrees** — fixed, see "F3 fix" below
 
   Default `onerror=None` means a directory that can't be listed is skipped
   silently, instead of raising `UnreadableEntries` — the exact failure this
@@ -91,6 +91,22 @@ Consequences:
 
   Compounding: fastmd5 now walks through the same function, so verification of a
   partially staged tree omits the same files and passes.
+
+  **Not a regression.** `os.walk(followlinks=True)` with no `onerror` was
+  already in `client/fastcp` at `c02c93c`, before the fileio refactor; copyplan
+  inherited it verbatim. `4f1c063` made *stat* failures noisy and did so
+  correctly — the miss is that an unlistable directory produces no entry to
+  stat, so it fails by omission and there is nothing for a stat-oriented check
+  to collect. What the branch changed is blast radius: one shared walk means
+  fastmd5 now inherits fastcp's blind spot.
+
+  **F3 fix (2026-07-31).** An `onerror` callback appending to the same
+  `problems` list, so an unlistable directory joins the existing report. Covers
+  the root of the walk too. `tests/test_copyplan.py` grew two checks, confirmed
+  red first: the subtree case returned `['readable/good.bin']` with the hidden
+  file silently absent, and the unlistable-root case returned `[]`. The check
+  verifies its own premise and skips if run as a user who can list a 0o000
+  directory, rather than passing vacuously.
 
 - [ ] **F4 · `mlperf_common/fileio/datastage.py:649` · no destination-is-a-directory check**
 
@@ -119,7 +135,7 @@ Consequences:
 
 ## Tier 3 — real, lower severity
 
-- [ ] **F6 · `client/fastmd5:111` · directory-symlink cycles now abort the run**
+- [ ] **F6 · `client/fastmd5:111` · directory-symlink cycles now abort the run** *(priority questioned — see note)*
 
   Swapping `Path.rglob('*')` (does not descend symlinked dirs) for
   `copyplan.list_relative_files` (`os.walk(followlinks=True)`) means a
@@ -127,6 +143,15 @@ Consequences:
   `UnreadableEntries`, and `fastmd5:113` turns that into `sys.exit`. Zero
   checksums printed — the tree can't be verified at all. Regression against the
   pre-branch behaviour.
+
+  **Priority questioned (2026-07-31, Matt).** Not convinced this is worth
+  fixing: it needs a dataset containing a self- or ancestor-referential
+  directory symlink, and unlike the rest of the list it fails loudly — a
+  nonzero exit with no output — rather than silently producing wrong results.
+  Left open, not scheduled. The proper fix is the depth-first walk with
+  visited-inode tracking that the standing `FIXME` in `list_relative_files`
+  describes, which would also close the cycle hole `os.walk(followlinks=True)`
+  leaves open.
 
 - [ ] **F7 · `mlperf_common/fileio/datastage.py:406` · `_chmod_parents` infinite loop on `/`**
 
