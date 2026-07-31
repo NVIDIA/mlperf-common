@@ -246,16 +246,34 @@ class Stager:
 
         self.align = BUFFER_ALIGN
         self.dest_root = os.path.abspath(args.destination)
-        # One piece per rank per round; the assembled window is node_count of
-        # them.  Computed once here and handed to every FileLayout so the two
-        # can never drift apart.
-        self.piece = max(align_down(args.window // topology.node_count, self.align), self.align)
+        # buffer_size is what each rank reads per round, exactly as fastcp's
+        # --buffer-size is what each thread reads.  The assembled window that
+        # every rank must hold is node_count of those, so memory scales with the
+        # job: an all-gather delivers the whole window to every participant.
+        self.piece = args.buffer_size
         window = self.piece * topology.node_count
+
+        # Fail before allocating rather than dying inside a CUDA OOM.
+        budget = int(torch.cuda.get_device_properties(self.device).total_memory * 0.25)
+        if window > budget:
+            raise RuntimeError(
+                f"--buffer-size {self.piece >> 20}M across {topology.node_count} nodes "
+                f"needs a {window / 1024 ** 3:.1f} GiB window per rank, over the "
+                f"{budget / 1024 ** 3:.1f} GiB budget. Lower --buffer-size to at most "
+                f"{max(align_down(budget // topology.node_count, self.align), self.align) >> 20}M."
+            )
 
         self.send_host = [pinned_aligned(self.piece, self.align) for _ in range(SEND_SLOTS)]
         self.recv_host = [pinned_aligned(window, self.align) for _ in range(RECV_SLOTS)]
         self.send_dev = torch.empty(self.piece, dtype=torch.uint8, device=self.device)
         self.recv_dev = torch.empty(window, dtype=torch.uint8, device=self.device)
+
+        if topology.rank == 0:
+            pinned = SEND_SLOTS * self.piece + RECV_SLOTS * window
+            print(f"datastage: {self.piece >> 20} MiB per rank per round, "
+                  f"{window / 1024 ** 3:.2f} GiB window; per rank "
+                  f"{(self.piece + window) / 1024 ** 3:.2f} GiB device, "
+                  f"{pinned / 1024 ** 3:.2f} GiB pinned host", flush=True)
 
     def _read_piece(self, fd, mview, offset, length, block_size):
         """Fill mview[:length] from fd at offset, split across reader threads."""
@@ -288,20 +306,25 @@ class Stager:
         for future in futures:
             future.result()
 
-    def _write_segments(self, fd, mview, layout, round_index, block_size):
-        """Scatter one assembled window to its true file offsets."""
+    def _write_segments(self, fd, mview, layout, round_index, block_size, ready):
+        """Scatter one assembled window to its true file offsets.
+
+        `ready` is the event marking the end of the device-to-host copy that
+        filled `mview`.  Each writer waits on it rather than the main thread, so
+        the main thread can go on and launch the next round's collective while
+        the copy is still in flight.
+        """
+        def write_one(base, length, offset):
+            ready.synchronize()
+            return direct_io.pwrite(fd, mview[base:base + layout.piece],
+                                    length, offset, block_size)
+
         futures = []
         for node in range(self.topo.node_count):
             offset, length = layout.segment(node, round_index)
             if length == 0:
                 continue
-            base = node * layout.piece
-            futures.append(
-                self.pool.submit(
-                    direct_io.pwrite, fd,
-                    mview[base:base + layout.piece], length, offset, block_size,
-                )
-            )
+            futures.append(self.pool.submit(write_one, node * layout.piece, length, offset))
         return futures
 
     def stage_file(self, src, dst, size, mtime_ns):
@@ -404,10 +427,16 @@ class Stager:
 
                 _, send_view, _ = self.send_host[slot]
                 self.send_dev.copy_(send_view, non_blocking=True)
-                torch.cuda.synchronize()
-                free_q.put(slot)
+                h2d_done = torch.cuda.Event(blocking=True)
+                h2d_done.record()
 
+                # Safe to launch before the copy has landed: the collective is
+                # queued behind it on the same stream.  Waiting on this one
+                # event, rather than the whole device, is what lets the reader
+                # refill the slot while the collective is still running.
                 dist.all_gather_into_tensor(self.recv_dev, self.send_dev, group=topo.group)
+                h2d_done.synchronize()
+                free_q.put(slot)
 
                 recv_slot = round_index % RECV_SLOTS
                 for future in pending[recv_slot]:
@@ -416,10 +445,16 @@ class Stager:
 
                 _, recv_view, recv_mview = self.recv_host[recv_slot]
                 recv_view.copy_(self.recv_dev, non_blocking=True)
-                torch.cuda.synchronize()
+                d2h_done = torch.cuda.Event(blocking=True)
+                d2h_done.record()
 
+                # The writers wait on d2h_done themselves, so the main thread
+                # returns to the top of the loop immediately.  recv_dev is safe
+                # to reuse because the next round's collective is queued behind
+                # this copy, and recv_host[recv_slot] is held by the pending
+                # futures checked above.
                 pending[recv_slot] = self._write_segments(
-                    fd_dst, recv_mview, layout, round_index, dst_block
+                    fd_dst, recv_mview, layout, round_index, dst_block, d2h_done
                 )
             for futures in pending:
                 for future in futures:
@@ -495,11 +530,12 @@ def parse_args(argv=None):
                         help="reader/writer threads per rank (default: 16). Only helps "
                              "while the per-round read is large; at high node counts the "
                              "window is divided thinly enough that reads are single-threaded.")
-    parser.add_argument("-w", "--window", type=parse_size, default=parse_size("2G"),
-                        help="assembled all-gather window (default: 2G). Divided by the "
-                             "node count to give the per-rank read size, so raise it at "
-                             "high node counts. Costs this much device memory and twice "
-                             "as much pinned host memory.")
+    parser.add_argument("-b", "--buffer-size", type=parse_size, default=parse_size("8M"),
+                        help="bytes each rank reads per round (default: 8M, must be a "
+                             "multiple of 2MiB). The all-gather assembles one of these "
+                             "per node into a window that every rank holds, so device "
+                             "and pinned host memory scale with the node count: at 2048 "
+                             "nodes 8M gives a 16 GiB window.")
     parser.add_argument("--chmod", type=lambda v: int(v, 8), default=0o777,
                         help="octal mode for staged files and directories (default: 0777)")
     parser.add_argument("--dry-run", action="store_true",
@@ -515,6 +551,12 @@ def parse_args(argv=None):
         args.destination = args.files[-1]
     if not args.sources:
         parser.error(f"missing destination file operand after '{args.destination}'")
+    # O_DIRECT wants alignment, and the all-gather wants a uniform count, so
+    # round up rather than rejecting -- same as fastcp.
+    if args.buffer_size % BUFFER_ALIGN != 0:
+        args.buffer_size = align_up(args.buffer_size, BUFFER_ALIGN)
+        print(f"{prog}: rounding buffer size up to {args.buffer_size >> 20} MiB",
+              file=sys.stderr)
     for src in args.sources:
         if not os.path.exists(src):
             sys.exit(f"{prog}: cannot stat '{src}': No such file or directory")
