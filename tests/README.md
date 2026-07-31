@@ -16,7 +16,8 @@ Each test runs in its own interpreter, because each installs its own fake
 | file | covers |
 | --- | --- |
 | `test_layout.py` | `FileLayout` tiles each file exactly once, with aligned boundaries |
-| `test_copyplan.py` | tree walk, src→dst mapping, refusal to plan an unreadable tree |
+| `test_copyplan.py` | tree walk, src→dst mapping, refusal to plan an unreadable tree, cp argument semantics |
+| `test_buildplan.py` | rank 0 broadcasts planning failures instead of raising them past its blocked peers |
 | `test_pipeline.py` | `stage_file` end to end: bytes in == bytes out |
 | `test_device.py` | events land on this rank's device; the drainer copies on its own stream, ordered behind the collective |
 | `stubs.py` | fake `torch` / `torch.distributed` so the above run on a CPU |

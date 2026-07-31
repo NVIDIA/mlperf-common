@@ -156,7 +156,7 @@ Consequences:
   exercised end to end — fastcp copying real bytes, datastage's parse_args via
   the stub harness — with error text matching cp's wording.
 
-- [ ] **F5 · `mlperf_common/fileio/datastage.py:572` · unguarded os.stat before the broadcast**
+- [x] **F5 · `mlperf_common/fileio/datastage.py:572` · unguarded os.stat before the broadcast** — fixed, see "F5 fix" below
 
   The `try` around the payload build catches only `UnreadableEntries`. A file
   unlinked between `plan_copy_operations`'s stat and this one raises
@@ -164,6 +164,29 @@ Consequences:
   `broadcast_object_list`. Job dies on a 10+ minute watchdog timeout with an
   opaque collective message instead of `cannot stat <path>`. The comment above
   the call says this must not happen.
+
+  **F5 fix (2026-07-31).** The `except UnreadableEntries` became `except
+  Exception`, carrying the type name into the broadcast payload. The bar is
+  reaching the broadcast, not anticipating the cause — narrowing the catch to
+  the failure you went looking for is what created the hang.
+
+  Two live paths, not one: the `os.stat` race, and `CopyArgumentError` from
+  `plan_copy_operations`, which became reachable here when F4 moved the cp
+  rules into the planner. The new `tests/test_buildplan.py` caught the second
+  on its own — I had only written the test for the first.
+
+  Result, raised by every rank together instead of a watchdog timeout:
+
+      cannot stage the source tree: FileNotFoundError: [Errno 2] No such
+      file or directory: '/.../src/vanished.bin'
+
+  `torch.tensor` was added to the stubs to reach `build_plan`'s success path,
+  which shaves a little off F15.
+
+  **Same class, not fixed here:** `Stager.__init__`'s memory-budget check
+  raises per-rank. It is uniform when every node has the same GPU, so it fails
+  cleanly in practice, but it is the same shape of hazard. `stage_file` already
+  documents that a mid-file failure leaves peers to the watchdog.
 
 ## Tier 3 — real, lower severity
 

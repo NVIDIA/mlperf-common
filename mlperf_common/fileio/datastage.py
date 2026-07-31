@@ -597,14 +597,24 @@ def build_plan(args):
     """Rank 0 walks the source tree; everyone else takes its answer verbatim."""
     if dist.get_rank() == 0:
         # A planning failure has to be broadcast rather than raised here: every
-        # other rank is already waiting in the broadcast below and would hang
-        # until the NCCL watchdog fired.
+        # other rank is already waiting in the broadcast below, so anything
+        # raised instead of broadcast does not surface as an error at all --
+        # rank 0 exits, its peers wait for a message that never comes, and the
+        # job dies on an NCCL watchdog timeout naming neither the file nor the
+        # reason, ten minutes of allocation later.
+        #
+        # So catch everything, not just the failure we went looking for.  The
+        # stat below re-stats files plan_copy_operations already stat'd, and
+        # loses that race against anything modifying shared storage; and
+        # plan_copy_operations rejects bad arguments outright.  Neither is an
+        # UnreadableEntries.  The bar is reaching the broadcast, not
+        # anticipating the cause.
         try:
             jobs = plan_copy_operations(args.sources, args.destination)
             payload = [[(src, dst, size, os.stat(src).st_mtime_ns)
                         for src, dst, size in jobs]]
-        except UnreadableEntries as exc:
-            payload = [{"error": str(exc)}]
+        except Exception as exc:  # noqa: BLE001 - re-raised on every rank below
+            payload = [{"error": f"{type(exc).__name__}: {exc}"}]
     else:
         payload = [None]
     dist.broadcast_object_list(payload, src=0)
