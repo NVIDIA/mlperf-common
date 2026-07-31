@@ -1,0 +1,157 @@
+{
+ "level": "max",
+ "summary": "The 53 verified findings collapse to ~15 distinct defects, heavily duplicated across the staging pipeline. The most serious are two silent-data-corruption bugs in datastage (the drainer thread never calls torch.cuda.set_device, so its copy-completion events record on GPU 0 and writers race the D2H DMA on 7 of 8 ranks; and dist.new_group sorts its rank list, so all-gather slot order stops matching node_index under --distribution=arbitrary), plus three silent-data-loss/hang paths in planning (os.walk with no onerror drops unreadable subtrees, a missing destination-is-a-directory check makes plan_copy_operations discard sources[1:] or plan a directory as a 4 KiB file, and an unguarded os.stat in build_plan kills rank 0 while every peer blocks in the broadcast). Below those sit real but lower-severity issues: a chmod loop that spins forever on dest_root \"/\" and widens pre-existing directories to 0777, leaked .datastage.tmp files, an fastmd5 walk regression on directory symlinks, unclamped all-gather/D2H traffic, a memory-budget error whose suggested --buffer-size is itself over budget, no dedicated CUDA stream so the advertised overlap never happens, and test doubles that make exactly these corruption modes impossible to catch.",
+ "findings": [
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 476,
+   "summary": "The drainer thread never calls torch.cuda.set_device, so the CUDA events it creates bind to device 0's stream instead of the rank's GPU, and `_write_one`'s `ready.synchronize()` (line 338) and `last_copy.synchronize()` (line 494) wait on nothing. [same root cause also at: mlperf_common/fileio/datastage.py:477, mlperf_common/fileio/datastage.py:477]",
+   "failure_scenario": "`main()` calls `torch.cuda.set_device(LOCAL_RANK)` (line 669) on the main thread only, but CUDA's current device is per-host-thread, so `drain_thread` (started at line 516) has current device 0. `chunk_view.copy_(recv_dev[...], non_blocking=True)` is issued on the rank's real device (the tensor's device guard picks it), but `torch.cuda.Event(blocking=True)` + `copied.record()` resolves `torch.cuda.current_stream()` against the *thread's* current device, so on any rank with LOCAL_RANK != 0 the event is lazily created and recorded on device 0's idle default stream. `_write_one` then calls `ready.synchronize()`, which returns immediately, and `direct_io.pwrite` reads the pinned chunk before the D2H copy has landed; `last_copy.synchronize()` likewise releases `recv_dev[dev_slot]` back to `recv_free_q` while copies are still reading it, so the next all-gather overwrites it. On an 8-GPU node, 7 of every 8 slices of every staged file get zeros or stale bytes \u2014 a file of exactly the right length with wrong contents, no exception, and training runs on the corrupt dataset. `tests/stubs.py` makes `FakeEvent.synchronize()` a no-op, so `test_pipeline.py` cannot go red on this.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 199,
+   "summary": "`dist.new_group(ranks)` sorts its rank list, so a member's group rank is its position in sorted order, not its position in `group_ranks[l]` \u2014 but the drainer maps all-gather output position i to `layout.segment(i, ...)` assuming position == node_index. [same root cause also at: mlperf_common/fileio/datastage.py:199]",
+   "failure_scenario": "Confirmed against torch/distributed/distributed_c10d.py (`ranks = sorted(ranks)` then `group_rank = ranks.index(global_rank)`). `Topology` indexes `group_ranks[local_rank]` by `node_index` (order of first hostname appearance in the `all_gather_object` result), but that list is only sorted when RANK happens to be block/cyclic distributed. Under `--distribution=arbitrary` with hostfile `A B B A`: identities are rank0=(A,0), rank1=(B,0), rank2=(B,1), rank3=(A,1); `group_ranks[1] = [3, 2]`, which `new_group` sorts to `[2, 3]`, so group rank 0 is rank 2 on host B (node_index 1) and group rank 1 is rank 3 on host A (node_index 0). `all_gather_into_tensor` therefore lays B's sub-shard at window offset `0 * piece` and A's at `1 * piece`, while the drainer writes offset `first+index` to `layout.segment(first+index, round_index)` (line 482). Every file's LOCAL_RANK-1 slice is written with the two nodes' sub-shards swapped: right-sized file, wrong bytes, no error \u2014 precisely the mis-grouping corruption `Topology` was written to prevent.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/copyplan.py",
+   "line": 82,
+   "summary": "os.walk is called with the default onerror=None, so a directory whose contents cannot be listed is silently skipped instead of raising UnreadableEntries \u2014 the exact silent-partial-copy failure this module was written to prevent. [same root cause also at: mlperf_common/fileio/copyplan.py:82, mlperf_common/fileio/copyplan.py:82, mlperf_common/fileio/copyplan.py:82]",
+   "failure_scenario": "Verified locally: a tree src/ containing good/a.bin and secret/b.bin where secret/ is mode 000 makes list_relative_files('src') return ['good/a.bin'] and plan_copy_operations return a single job, with no exception. If root itself is unlistable the result is [] \u2014 also silent. In production, one dataset subdirectory with a bad mode / EIO / stale Lustre handle makes `datastage -r $SLOW_DATADIR/$DATASET $DATADIR` stage a partial dataset and exit 0. Because fastmd5 now walks through the same function, checksumming the staged tree omits the same files, so verification passes too, and training runs on a silently incomplete dataset.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 649,
+   "summary": "`parse_args` validates sources but never checks that the destination is an existing directory, while the shared `plan_copy_operations` silently falls back to a single-file copy of `sources[0]` when it is not (copyplan.py:112) \u2014 a precondition fastcp enforces at its own call site and datastage does not. [same root cause also at: mlperf_common/fileio/copyplan.py:112, mlperf_common/fileio/datastage.py:649, mlperf_common/fileio/datastage.py:649, mlperf_common/fileio/copyplan.py:113, mlperf_common/fileio/copyplan.py:112]",
+   "failure_scenario": "Reproduced: `datastage -r /lustre/dataset /raid/scratch/dataset --dry-run` with the destination not yet created prints one job `\"/lustre/dataset -> /raid/scratch/dataset (4096 bytes)\"` \u2014 the whole tree collapses to a single bogus job for the source *directory*. In a real run `open_maybe_direct(src_dir, O_RDONLY)` gets EINVAL for O_DIRECT on a directory, which line 130 swallows, so it falls back to a buffered directory open; the reader thread then dies with `preadv failed with error: [Errno 21] Is a directory` while every peer sits in the collective until the NCCL watchdog fires, leaving a stray `<dst>.datastage.tmp.<jobid>`. With more than one source (`datastage a.bin b.bin MISSING_DIR`) `sources[1:]` are dropped with no message and the job exits 0 having staged one of two files. `client/fastcp` blocks both cases in `parse_and_validate_args` (lines 172-179); datastage's `parse_args` omits the equivalent check.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 572,
+   "summary": "The os.stat() call that builds the broadcast payload sits inside a try that only catches UnreadableEntries, so any other rank-0 planning error escapes before the broadcast and parks every other rank until the watchdog fires \u2014 the precise hang the comment above it says must not happen. [same root cause also at: mlperf_common/fileio/datastage.py:572, mlperf_common/fileio/datastage.py:572]",
+   "failure_scenario": "plan_copy_operations already stat'd every source, and this re-stats each one to pick up st_mtime_ns. If a file is unlinked or a Lustre OST goes away between the two stats, os.stat raises FileNotFoundError/OSError, which is not UnreadableEntries; build_plan propagates it, rank 0 runs `finally: dist.destroy_process_group()` and exits, while ranks 1..W-1 are already blocked in dist.broadcast_object_list. They hang until the NCCL watchdog timeout (10+ minutes) and the job dies with an opaque collective-timeout message instead of \"cannot stat <path>\", burning the allocation.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "client/fastmd5",
+   "line": 111,
+   "summary": "Replacing `Path.rglob('*')` with `copyplan.list_relative_files` (`os.walk(followlinks=True)`) removed fastmd5's immunity to directory-symlink cycles; it now aborts the whole run with zero checksum output. [same root cause also at: client/fastmd5:116]",
+   "failure_scenario": "Verified on a tree `data/{f1.bin, sub/{f2.bin, up -> ..}}`: the old `Path.rglob('*')` walk (which does not descend into symlinked directories) enumerated 3 entries and fastmd5 printed checksums for the real files. The new walk descends `up` ~40 levels until the kernel returns ELOOP, and `list_relative_files` raises `UnreadableEntries: 1 unreadable entry: data/sub/up/sub/up/.../up: Too many levels of symbolic links`, which `client/fastmd5:113` turns into `sys.exit(f\"fastmd5: {exc}\")`. So a dataset containing any self- or ancestor-referential directory symlink (`latest -> .`, `current -> ..`) can no longer be checksummed at all \u2014 fastmd5 exits 1 having printed not one line, leaving no way to verify a staged copy of that tree.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 406,
+   "summary": "_chmod_parents loops forever when dest_root is \"/\", because os.path.dirname(\"/\") returns \"/\" and the loop condition stays true. [same root cause also at: mlperf_common/fileio/datastage.py:406]",
+   "failure_scenario": "`datastage a.bin /` makes dest_root == \"/\" and dst == \"/a.bin\". _chmod_parents starts at path = \"/\", which satisfies `path == self.dest_root`, chmods \"/\" to 0777, then sets path = os.path.dirname(\"/\") == \"/\" and repeats \u2014 an unbounded loop that keeps chmod'ing the container root while every peer rank blocks in the dist.barrier on the next line, so the job hangs until the wall clock limit rather than failing.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 408,
+   "summary": "_chmod_parents chmods every directory from the file's parent up to and including dest_root, not just the ones it created, so a pre-existing destination tree is silently widened to --chmod (0777 by default).",
+   "failure_scenario": "With a pre-existing destination root created as `mkdir -m 0750 /raid/scratch/ds && mkdir -m 0750 /raid/scratch/ds/a`, running `datastage -r SRC /raid/scratch/ds` (default --chmod 0777) walks up from dirname(dst) and chmods every level whose path is dest_root or below it. Verified with a stubbed Stager: dest=0o750 and dest/a=0o750 before, dest=0o777 and dest/a=0o777 after. The docstring says the function exists to fix 'the directories we created' because os.makedirs applies the umask, but the loop's terminating condition (`path.startswith(dest_root + os.sep) or path == dest_root`) makes no distinction between directories datastage created and directories that were already there. Under --container-remap-root the process is root, so the chmod always succeeds and there is no error to notice.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 343,
+   "summary": "The .datastage.tmp.<SLURM_JOB_ID> file is preallocated to the full source size and is only removed by the success-path os.rename; no failure path unlinks it, and the job-ID suffix means each retry orphans a fresh full-size copy.",
+   "failure_scenario": "stage_file creates `{dst}.datastage.tmp.{SLURM_JOB_ID}` and immediately `os.ftruncate(fd, size)`, then writes real data into it. The only thing that ever removes it is `os.rename(tmp, dst)` at the end of the success path; `grep -n 'unlink|os.remove'` over datastage.py returns nothing. If staging dies partway (NCCL error, ENOSPC, a rank raising out of _run_pipeline), main() prints a diagnostic and re-raises without cleanup, leaving a partially written temp file of up to `size` bytes on every node's local scratch. Because the name is scoped to SLURM_JOB_ID, a resubmitted job gets a new suffix rather than reusing/truncating the old file, so a resubmit loop against a flaky fabric accumulates one orphaned near-full copy of the dataset per attempt until node-local NVMe fills -- and the next attempt then fails for a different reason (ENOSPC) than the original. The tests show the authors care about this (stage_once asserts on leftover `.datastage.tmp.` files) but only ever exercise the success path.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 537,
+   "summary": "The all-gather always transfers a full --buffer-size per rank per round regardless of how many bytes the round actually holds, so every file costs buffer_size x node_count of fabric traffic even when it is a few KiB. [same root cause also at: mlperf_common/fileio/datastage.py:537, mlperf_common/fileio/datastage.py:474]",
+   "failure_scenario": "FileLayout gives shard = align_up(ceil(slice_len/N), 2MiB) >= 2MiB whenever a slice is non-empty, so rounds == 1 for any file below buffer_size, and send_dev is always `piece` bytes wide. Staging a 1 KiB file at N=2048 nodes with the default -b 8M issues an all_gather that delivers 8 MiB x 2048 = 16 GiB into every node's recv_dev, and the drainer then D2H-copies the whole window (nbytes = count * layout.piece is unconditional at line 474; only the pwrite skips zero-length segments) before discarding all but 1 KiB. For a dataset of 100k small files this moves petabytes of NCCL and PCIe traffic to stage a few GB, plus two world barriers per file \u2014 datastage ends up far slower than the rsync path it replaces on small-file datasets.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 277,
+   "summary": "The `--buffer-size` value suggested by the device-memory budget error is itself still over budget, so following the error's own advice reproduces the identical error; the formula it replaced (`align_down(budget // node_count)` against a `window > budget` check) was exact. [same root cause also at: mlperf_common/fileio/datastage.py:277, mlperf_common/fileio/datastage.py:277, mlperf_common/fileio/datastage.py:277]",
+   "failure_scenario": "Reproduced against the repo's own stubs with `total_memory` = 79.65 GiB (H100 80GB) and 64 nodes: `-b 512M` is rejected with \"needs 64.5 GiB of device memory, over the 47.8 GiB budget. Lower --buffer-size to at most 382M.\" Re-running with `-b 382M` prints \"needs 48.1 GiB ... Lower --buffer-size to at most 382M.\" \u2014 byte-identical advice. `-b 380M` is also rejected. The check is `piece + RECV_DEV_SLOTS*node_count*piece > budget` (i.e. `piece*(2N+1)`), but `per_window` divides only by `RECV_DEV_SLOTS*node_count` (`2N`), dropping the `+1`; the correct answer here is 378M. Every node count up to ~64 always mis-suggests (I checked N=16/32/64 on 80/94/141 GB devices \u2014 all STILL REJECTED), so an operator burns repeated multi-node job allocations, each dying in `Stager.__init__` before any staging, with no workable value ever offered.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 475,
+   "summary": "The drainer's device-to-host copies are issued on the same default stream as the H2D copy and the collective, so the overlap the design is built around never happens.",
+   "failure_scenario": "The comment at line 444 claims \"the collective for round k+1 can overlap the copy-back and writes for round k\", but chunk_view.copy_(recv_dev[...], non_blocking=True) is enqueued on the default stream from the drain thread while the main thread enqueues H2D(k+1) and all_gather(k+1) on that same stream; single-stream work serialises in enqueue order (and ProcessGroupNCCL makes its internal stream wait on the default stream), so the copy-back and the next collective run back to back. All the machinery of RECV_DEV_SLOTS=2, the drain thread and the CUDA events buys only host-side write overlap; staging runs at collective+copyback serialised instead of max(). A dedicated torch.cuda.Stream for the drainer, with the existing events used as cross-stream waits, is what delivers the intended overlap.",
+   "category": "cleanup",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "client/direct_io.py",
+   "line": 35,
+   "summary": "The shim's sys.path fallback cannot recover when a stale `mlperf_common` is already importable, because the retry re-resolves through the package object cached in sys.modules whose __path__ still points at the old install.",
+   "failure_scenario": "Verified: with a stub `mlperf_common` package (no `fileio` subpackage) on sys.path -- i.e. a container that pip-installed an older mlperf-common from a benchmark's requirements.txt -- a caller that only puts client/ on sys.path and does `import direct_io` fails with `ImportError: No module named 'mlperf_common.fileio'. direct_io lives in the mlperf_common package. Either install mlperf-common, or keep this script in a tree with mlperf_common/ alongside client/`, even though the script is already in exactly such a tree. The first `from mlperf_common.fileio.direct_io import *` leaves `mlperf_common` in sys.modules bound to the site-packages location, so inserting the repo root at sys.path[0] changes nothing on the retry. The user is told to do the one thing they have already done, and the compatibility path the shim exists to serve is dead.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "tests/test_pipeline.py",
+   "line": 90,
+   "summary": "The fake all-gather ignores its `inp` argument and re-reads each segment from the source fd, so all 8 multi-node pipeline cases pass even when the reader produces completely wrong bytes.",
+   "failure_scenario": "Verified empirically: wrapping `Stager._read_piece` so it overwrites everything it read with 0xEE and running `python3 tests/run_tests.py` still reports 0 failures for all 8 MULTINODE configurations (only the 7 single-node cases go red), because `fake_all_gather` fills the window from `os.pread(STATE['fd'], ...)` rather than from the buffer the reader filled. So the read path -- `_read_piece`'s offset math, its multi-threaded split, send-slot recycling and the H2D copy -- is unverified in every multi-node case; instrumentation shows the threaded branch of `_read_piece` is entered exactly once in the whole suite, and that one call is in a multi-node case whose result is discarded. A regression that reads the wrong offsets or recycles a send slot before the H2D copy lands ships with a green suite and corrupts the staged dataset on the cluster.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  },
+  {
+   "file": "tests/stubs.py",
+   "line": 106,
+   "summary": "The fake torch.distributed omits `all_gather_object` and `new_group` (and torch omits `tensor`), so `Topology` and `build_plan` -- the pieces CLAUDE.md flags as silently corrupting -- can never be constructed by any test.",
+   "failure_scenario": "`stubs.install()` defines only barrier/get_rank/broadcast_object_list/all_reduce/all_gather_into_tensor, so instantiating `ds.Topology` raises AttributeError ('module torch.distributed has no attribute all_gather_object') and `ds.build_plan` raises AttributeError on `torch.tensor`. Both test files consequently hand-roll their own `Topology` class (test_layout.py:47, test_pipeline.py:95) and never touch the real one. Reintroduce the exact bug CLAUDE.md warns about -- grouping nodes by `rank // local_world_size` instead of by reported hostname -- and `python3 tests/run_tests.py` still prints 'all tests passed', while a real `--distribution=arbitrary` run silently stages a corrupt dataset. The same holds for build_plan's cross-rank size/mtime consistency check.",
+   "category": "correctness",
+   "verdict": "CONFIRMED"
+  }
+ ],
+ "refuted": [
+  {
+   "file": "client/fastmd5",
+   "line": 111,
+   "summary": "Replacing fastmd5's rglob walk with copyplan.list_relative_files (os.walk with followlinks=True) makes it descend symlinked directories, so a self-referential symlink now loops forever instead of finishing."
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 660,
+   "summary": "The copy plan is printed by two separate code paths that must be kept in step by hand."
+  },
+  {
+   "file": "mlperf_common/fileio/__init__.py",
+   "line": 1,
+   "summary": "The commit that introduced this package uses a subject that does not follow the repo's commit-message convention."
+  },
+  {
+   "file": "mlperf_common/fileio/datastage.py",
+   "line": 245,
+   "summary": "FileLayout's documented alignment invariant silently depends on an unenforced precondition (piece % align == 0); nothing in FileLayout or Stager asserts it and test_layout.py only ever passes multiples of BUFFER_ALIGN."
+  }
+ ],
+ "stats": {
+  "level": "max",
+  "finders": 6,
+  "candidates": 57,
+  "verifierAgents": 40,
+  "verified": 57,
+  "refuted": 4,
+  "reported": 15
+ }
+}
