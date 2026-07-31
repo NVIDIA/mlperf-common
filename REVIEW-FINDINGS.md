@@ -180,10 +180,24 @@ Consequences:
   fixing: it needs a dataset containing a self- or ancestor-referential
   directory symlink, and unlike the rest of the list it fails loudly — a
   nonzero exit with no output — rather than silently producing wrong results.
-  Left open, not scheduled. The proper fix is the depth-first walk with
-  visited-inode tracking that the standing `FIXME` in `list_relative_files`
-  describes, which would also close the cycle hole `os.walk(followlinks=True)`
-  leaves open.
+  Left open, not scheduled.
+
+  **Measured, since both this file and the code's own FIXME described it
+  wrongly.** It does not recurse forever and cannot exhaust the stack
+  (`os.walk` is iterative). The kernel's 40-symlink limit bounds the descent:
+  82 directories, depth 81, under 10 ms on a `up -> ..` tree. The mechanism is
+  not the walk — CPython wraps `entry.is_dir()` in `try/except OSError` and
+  treats failure as "not a directory", so the un-openable link is reclassified
+  as a *file* and the walk reports nothing, not even via the `onerror` hook F3
+  added. The ELOOP surfaces from `_stat_or_problem`, as one unreadable entry.
+
+  **Trap for whoever does fix it:** the walk enumerates the files under the
+  cycle once per level on the way down, so "fixing" this by tolerating or
+  skipping the unreadable entry converts a loud refusal into ~40 redundant
+  copies of everything beneath it — moving it from the loud category into the
+  silent one. A real fix detects the cycle (depth-first walk tracking visited
+  `(st_dev, st_ino)`), which also removes the duplicates. Documented in the
+  `list_relative_files` docstring.
 
 - [ ] **F7 · `mlperf_common/fileio/datastage.py:406` · `_chmod_parents` infinite loop on `/`**
 

@@ -131,9 +131,23 @@ def list_relative_files(root):
     directory under it cannot be listed, reporting every such entry rather than
     dying on the first one.
 
-    FIXME: os.walk(followlinks) doesn't protect against cycles
-    to fix this we'd need to write our own version that did a depth-first
-    spanning tree.
+    Nothing here detects symlink cycles (`latest -> .`, `up -> ..`), but they
+    do not hang: the kernel allows 40 symlink traversals per path resolution,
+    so the descent stops around 40 levels down, in milliseconds.  What that
+    looks like is worth knowing, because os.walk hides it -- it wraps
+    entry.is_dir() in try/except OSError and treats a failure as "not a
+    directory", so the un-openable link is reclassified as a *file* and the
+    walk reports no error at all, not even through onerror.  The ELOOP then
+    surfaces here, from the stat, as an unreadable entry, and the copy is
+    refused.
+
+    That refusal is the safe outcome, so do NOT "fix" this by skipping the
+    unreadable entry: the walk enumerates the files under the cycle once per
+    level on the way down, so tolerating the ELOOP would turn a loud refusal
+    into ~40 redundant copies of everything beneath it.  A real fix means
+    detecting the cycle -- a depth-first walk tracking visited (st_dev, st_ino)
+    -- which also drops the duplicates.  Not worth it until a dataset actually
+    contains such a link.
     """
     file_list = []
     problems = []
