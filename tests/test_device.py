@@ -14,7 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Every CUDA event must be recorded against this rank's device, not device 0.
+"""CUDA bookkeeping the pipeline gets to be wrong about on a CPU.
+
+Two properties, both invisible in the staged bytes and both able to corrupt a
+real run: which *device* each event was recorded against, and which *stream*
+the drainer's copies were issued on.
+
+Every CUDA event must be recorded against this rank's device, not device 0.
 
 torch.cuda's current device is per host thread.  main() sets it once, on the
 main thread, so every thread datastage starts afterwards inherits device 0 --
@@ -30,8 +36,17 @@ None of that is visible in the staged bytes here, because on a CPU every
 test_pipeline.py cannot catch it.  What is visible is the device each event was
 recorded against, so that is what this checks.
 
+The drainer's copy-back must go to a stream of its own.  On the default stream
+it queues behind the next round's collective instead of running beside it on
+the copy engine, which makes the second device window RECV_DEV_SLOTS buys pure
+waste.  That much is only a throughput bug -- but a side stream that does not
+first wait on the collective's event is a correctness one, because the copy
+would read a window the all-gather has not filled.  Both are checkable here:
+concurrency is not observable on a CPU, but which stream work was issued on,
+and in what order, is.
+
 This is not a test of CUDA semantics.  It is a test that the threads which
-touch CUDA agree about which GPU they are on.
+touch CUDA agree about which GPU they are on and which queue they are feeding.
 """
 
 import os
@@ -51,6 +66,10 @@ MiB = 1024 ** 2
 # that this single process is the one that creates the destination file, while
 # the device it is actually on is 3.
 DEVICE = 3
+
+# Set by _run_pipeline when it starts the drain thread; this is how the ops
+# below are attributed to the drainer rather than to the main loop.
+DRAIN_THREAD = "datastage-drainer"
 
 torch, dist = stubs.install()
 modules = stubs.load_fileio()
@@ -95,9 +114,11 @@ def main():
         stager = ds.Stager(Args(root), Topology())
 
         del stubs.EVENTS[:]
+        del stubs.OPS[:]
         stager.stage_file(src, os.path.join(root, "dst"), size,
                           os.stat(src).st_mtime_ns)
         events = list(stubs.EVENTS)
+        ops = list(stubs.OPS)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -105,16 +126,50 @@ def main():
         print("  FAIL no events recorded at all; this test is exercising nothing")
         return 1
 
+    problems = []
+
     stray = [event for event in events if event.device != DEVICE]
-    print(f"test_device: {len(events)} events recorded, {len(stray)} on the wrong device")
     if stray:
         wrong = sorted({event.device for event in stray})
-        print(f"  FAIL {len(stray)}/{len(events)} events recorded against device "
-              f"{wrong} instead of {DEVICE}: a thread that records events "
-              f"never called torch.cuda.set_device, so synchronizing on them "
-              f"waits for nothing")
-        return 1
-    return 0
+        problems.append(
+            f"{len(stray)}/{len(events)} events recorded against device {wrong} "
+            f"instead of {DEVICE}: a thread that records events never called "
+            f"torch.cuda.set_device, so synchronizing on them waits for nothing")
+
+    # The drain thread is named where it is started, in _run_pipeline.
+    drained = [op for op in ops if op.thread == DRAIN_THREAD]
+    if not drained:
+        problems.append(
+            f"no operations issued from a thread named {DRAIN_THREAD!r}; either "
+            f"the drainer was renamed or the copy-back moved somewhere else, and "
+            f"this test is no longer looking at it")
+    else:
+        on_default = [op for op in drained if op.kind != "wait" and op.stream.default]
+        if on_default:
+            problems.append(
+                f"{len(on_default)}/{len(drained)} drainer operations were issued "
+                f"on the default stream, where they queue behind the next round's "
+                f"collective instead of overlapping it")
+
+        # Only meaningful once the copies are on a stream of their own: work
+        # queued on the default stream is already ordered behind the collective
+        # by the stream itself, and a host-side wait orders it too.  A side
+        # stream has neither, so it has to be told explicitly.
+        side = [op for op in drained if not op.stream.default]
+        if side:
+            copies = [i for i, op in enumerate(side) if op.kind == "copy"]
+            waits = [i for i, op in enumerate(side) if op.kind == "wait"]
+            if copies and (not waits or waits[0] > copies[0]):
+                problems.append(
+                    "the drainer copied from a device window on a side stream "
+                    "without first waiting on the event that says the all-gather "
+                    "filled it; nothing orders the copy behind the collective")
+
+    print(f"test_device: {len(events)} events, {len(drained)} drainer operations "
+          f"on {len({op.stream for op in drained})} stream(s), {len(problems)} problems")
+    for problem in problems:
+        print(f"  FAIL {problem}")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

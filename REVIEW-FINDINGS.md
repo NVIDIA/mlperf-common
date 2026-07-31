@@ -169,7 +169,7 @@ Consequences:
   378M. Mis-suggests at every node count checked (16/32/64 on 80/94/141 GB), so
   an operator burns repeated allocations with no workable value ever offered.
 
-- [ ] **F12 · `mlperf_common/fileio/datastage.py:475` · no dedicated stream, so no overlap**
+- [x] **F12 · `mlperf_common/fileio/datastage.py:475` · no dedicated stream, so no overlap** — fixed, see "F12 fix" below
 
   The comment at :444 claims round k+1's collective overlaps round k's copy-back.
   It doesn't: the drainer's `copy_` is enqueued on the default stream, same as
@@ -178,6 +178,28 @@ Consequences:
   buy only host-side write overlap. Fix is a dedicated `torch.cuda.Stream` for
   the drainer with the existing events as cross-stream waits — which also
   interacts with F1, so do them together.
+
+  **F12 fix (2026-07-31).** `Stager.drain_stream`, with the copies and their
+  events issued inside `torch.cuda.stream(self.drain_stream)` and the host-side
+  `assembled.synchronize()` replaced by `drain_stream.wait_event(assembled)` —
+  the drain thread now queues a round's copies while that round's collective is
+  still running, instead of blocking until it finishes.
+
+  `last_copy.synchronize()` before `recv_free_q.put` is now load-bearing for a
+  second reason: the next all-gather is issued on the default stream, which has
+  no ordering against `drain_stream`, so that host-side wait is the only thing
+  keeping the collective off a window still being copied. Commented in place.
+
+  `test_device.py` gained two checks: no drainer operation may be issued on the
+  default stream, and a side stream must `wait_event` before its first copy.
+  Both confirmed red before the change; the second was re-confirmed red by
+  deleting the `wait_event` line and re-running.
+
+  **Unmeasured.** The expected win is per-round `T_collective + T_d2h` becoming
+  roughly `max(...)`, but whether the GPU side is the bottleneck at all depends
+  on Lustre read and NVMe write rates. The stubs make every copy instantaneous,
+  so the suite cannot see throughput. Profile on a real node before claiming a
+  speedup.
 
 - [ ] **F13 · `client/direct_io.py:35` · shim fallback can't displace a stale install**
 

@@ -27,6 +27,7 @@ What this deliberately does NOT cover: real CUDA events, real NCCL, pinned
 memory alignment against a real filesystem block size, and O_DIRECT itself.
 """
 
+import contextlib
 import ctypes
 import importlib.util
 import os
@@ -64,6 +65,7 @@ class FakeTensor:
         return FakeTensor(buf=self._buf, offset=self._offset + start, size=stop - start)
 
     def copy_(self, other, non_blocking=False):
+        record_op("copy", self)
         source = other._view()
         self._view()[:len(source)] = source
         return self
@@ -86,16 +88,64 @@ class FakeDevice:
         return f"device(type={self.type!r}, index={self.index})"
 
 
-# CUDA's current device is per *host thread*, and a thread that never called
-# set_device gets device 0 no matter what any other thread did.  Modelling that
-# faithfully is the whole point: it is the property a thread doing CUDA work
-# can silently get wrong, and no amount of comparing staged bytes on a CPU will
-# show it up.
+# CUDA's current device and current stream are both per *host thread*, and a
+# thread that never set either gets device 0 and that device's default stream,
+# no matter what any other thread did.  Modelling that faithfully is the whole
+# point: it is the state a thread doing CUDA work can silently get wrong, and
+# no amount of comparing staged bytes on a CPU will show it up.
 _CURRENT = threading.local()
 
 # Every event that has been recorded, in order.  test_device.py checks which
 # device each one landed on; other tests ignore it.
 EVENTS = []
+
+# Every stream-ordered operation, in issue order, tagged with the thread that
+# issued it and the stream it went to.  What makes overlap possible is which
+# stream work lands on, and that is visible here even though concurrency is
+# not.
+OPS = []
+
+
+class Op:
+    __slots__ = ("kind", "thread", "stream", "obj")
+
+    def __init__(self, kind, stream, obj):
+        self.kind = kind
+        self.thread = threading.current_thread().name
+        self.stream = stream
+        self.obj = obj
+
+    def __repr__(self):
+        return f"Op({self.kind}, thread={self.thread!r}, stream={self.stream})"
+
+
+def record_op(kind, obj=None):
+    OPS.append(Op(kind, current_stream(), obj))
+
+
+class FakeStream:
+    """Stand-in for torch.cuda.Stream.
+
+    Only the ordering surface datastage needs: work issued inside a stream
+    context belongs to that stream, and wait_event makes this stream wait for
+    an event recorded on another one without blocking the host.
+    """
+
+    def __init__(self, device=None, default=False):
+        self.device = device.index if isinstance(device, FakeDevice) else int(device or 0)
+        self.default = default
+        self.waited = []
+
+    def wait_event(self, event):
+        self.waited.append(event)
+        OPS.append(Op("wait", self, event))
+
+    def __repr__(self):
+        kind = "default" if self.default else "side"
+        return f"{kind}-stream(device={self.device})"
+
+
+_DEFAULT_STREAMS = {}
 
 
 def current_device():
@@ -104,6 +154,25 @@ def current_device():
 
 def set_device(device):
     _CURRENT.index = device.index if isinstance(device, FakeDevice) else int(device)
+
+
+def current_stream(device=None):
+    explicit = getattr(_CURRENT, "stream", None)
+    if explicit is not None:
+        return explicit
+    index = current_device() if device is None else device
+    return _DEFAULT_STREAMS.setdefault(index, FakeStream(index, default=True))
+
+
+@contextlib.contextmanager
+def stream(target):
+    """torch.cuda.stream(): make `target` the calling thread's current stream."""
+    previous = getattr(_CURRENT, "stream", None)
+    _CURRENT.stream = target
+    try:
+        yield
+    finally:
+        _CURRENT.stream = previous
 
 
 class FakeEvent:
@@ -120,10 +189,13 @@ class FakeEvent:
 
     def __init__(self, blocking=False):
         self.device = None
+        self.stream = None
 
     def record(self):
         self.device = current_device()
+        self.stream = current_stream()
         EVENTS.append(self)
+        record_op("record", self)
 
     def synchronize(self):
         pass
@@ -140,6 +212,9 @@ def install(total_memory=288 * 1024 ** 3):
     torch.device = lambda kind="cuda", index=0: FakeDevice(kind, index)
     torch.cuda = types.SimpleNamespace(
         Event=FakeEvent,
+        Stream=lambda device=None: FakeStream(device),
+        stream=stream,
+        current_stream=current_stream,
         current_device=current_device,
         set_device=set_device,
         get_device_properties=lambda device: types.SimpleNamespace(

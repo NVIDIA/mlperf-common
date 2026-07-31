@@ -18,7 +18,7 @@ Each test runs in its own interpreter, because each installs its own fake
 | `test_layout.py` | `FileLayout` tiles each file exactly once, with aligned boundaries |
 | `test_copyplan.py` | tree walk, src→dst mapping, refusal to plan an unreadable tree |
 | `test_pipeline.py` | `stage_file` end to end: bytes in == bytes out |
-| `test_device.py` | every CUDA event is recorded against this rank's device |
+| `test_device.py` | events land on this rank's device; the drainer copies on its own stream, ordered behind the collective |
 | `stubs.py` | fake `torch` / `torch.distributed` so the above run on a CPU |
 
 ## Why the bytes are compared, not just the exit status

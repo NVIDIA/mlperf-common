@@ -289,6 +289,13 @@ class Stager:
         self.recv_dev = [torch.empty(window, dtype=torch.uint8, device=self.device)
                          for _ in range(RECV_DEV_SLOTS)]
 
+        # The copy-back gets a stream of its own.  non_blocking=True only means
+        # the host does not wait; the copy still queues on whatever stream it
+        # was issued to, so on the default stream it runs after the next round's
+        # collective rather than beside it on the copy engine -- which leaves
+        # the second window RECV_DEV_SLOTS pays for doing nothing.
+        self.drain_stream = torch.cuda.Stream(device=self.device)
+
         if topology.rank == 0:
             pinned = SEND_SLOTS * self.piece + CHUNK_SLOTS * chunk_bytes
             print(f"datastage: {self.piece >> 20} MiB per rank per round, "
@@ -463,7 +470,11 @@ class Stager:
                     if item is None:
                         break
                     dev_slot, round_index, assembled = item
-                    assembled.synchronize()
+                    # Order the copies behind the collective on the device
+                    # rather than on the host: the copies below can be queued
+                    # while the all-gather that fills this window is still
+                    # running, and the GPU holds them until it finishes.
+                    self.drain_stream.wait_event(assembled)
                     last_copy = None
                     for group, first in enumerate(
                             range(0, topo.node_count, self.group_nodes)):
@@ -481,10 +492,12 @@ class Stager:
 
                         _, chunk_view, chunk_mview = self.chunk_host[chunk]
                         base = first * layout.piece
-                        chunk_view[:nbytes].copy_(
-                            self.recv_dev[dev_slot][base:base + nbytes], non_blocking=True)
-                        copied = torch.cuda.Event(blocking=True)
-                        copied.record()
+                        with torch.cuda.stream(self.drain_stream):
+                            chunk_view[:nbytes].copy_(
+                                self.recv_dev[dev_slot][base:base + nbytes],
+                                non_blocking=True)
+                            copied = torch.cuda.Event(blocking=True)
+                            copied.record()
                         last_copy = copied
 
                         submitted = []
@@ -500,6 +513,14 @@ class Stager:
 
                     # The device window is reusable once its copies have landed,
                     # which is well before the writes behind them finish.
+                    #
+                    # This is also what keeps the window safe now that the
+                    # copies read it from their own stream: the next all-gather
+                    # is issued on the default stream, which has no ordering
+                    # against drain_stream, so the only thing stopping it from
+                    # overwriting a window still being copied is that the slot
+                    # does not go back on recv_free_q until the host has seen
+                    # the last copy complete.
                     if last_copy is not None:
                         last_copy.synchronize()
                     recv_free_q.put(dev_slot)
