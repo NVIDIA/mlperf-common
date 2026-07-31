@@ -121,15 +121,47 @@ Device and pinned-host memory scale with node count (the window is
 `--buffer-size × N`), so `Stager.__init__` budget-checks against 60% of device
 memory and fails with a suggested `--buffer-size` rather than OOMing inside CUDA.
 
-Run it as one task per GPU, under `slurm2pytorch` so RANK/WORLD_SIZE/LOCAL_RANK/
-MASTER_ADDR are set:
+Run it as one task per GPU. No wrapper needed:
 
 ```bash
-srun --ntasks-per-node=${DGXNGPU} ... slurm2pytorch \
+srun --ntasks-per-node=${DGXNGPU} ... \
     python3 -m mlperf_common.fileio.datastage -r "${SLOW_DATADIR}/${DATASET}" "${DATADIR}"
 ```
 
-`--dry-run` without RANK set prints the copy plan on a single node.
+`--dry-run` outside any launcher (`dist_env` reports `source == "single"`)
+prints the copy plan without touching CUDA.
+
+### dist_env
+
+`mlperf_common/dist_env.py` (stdlib-only, top level so `affinity/` can use it
+too) derives torch's `env://` variables from SLURM or OMPI — the same
+translation `client/slurm2pytorch` does in bash, which is why datastage no
+longer needs the wrapper. Launching under the wrapper still works: the
+variables are already set and taken as given (`source == "preset"`).
+
+The two must stay behaviourally compatible. `tests/test_dist_env.py` pins that
+down, and the claim was checked by running the real script and `configure()`
+against the same pre-wrapper environment and diffing all seven variables.
+
+Two deliberate divergences, both refusing to guess where the script defaults:
+
+* **`LOCAL_WORLD_SIZE`** — `SLURM_NTASKS_PER_NODE` is only set when
+  `--ntasks-per-node` was passed, so `srun -N2 -n16` has no source for it and
+  the script's `:-1` turns two 8-GPU nodes into sixteen single-rank "nodes".
+  We fall back to `SLURM_TASKS_PER_NODE` (always set under srun) and refuse to
+  guess on a multi-rank job.
+* **`MASTER_ADDR`** — the script falls back to `127.0.0.1`, which its own
+  comment says "will fail for multinode", as a rendezvous that hangs to the
+  wall clock. We parse the first hostname out of slurm's compressed nodelist
+  (`dgx[001-004,007]` → `dgx001`, zero padding preserved — `dgx1` doesn't
+  resolve), and error immediately if that fails on a multi-node job.
+
+There is deliberately **no `PYTORCH_VERSION` gate**; the script has one because
+it wraps arbitrary commands in arbitrary containers.
+
+Validation splits: `dist_env` checks that the *sources* are present, agree, and
+are arithmetically coherent; `Topology` checks that the resulting *layout* is
+block-distributed. Don't duplicate one into the other.
 
 ### client/ and src/
 
@@ -137,6 +169,10 @@ srun --ntasks-per-node=${DGXNGPU} ... slurm2pytorch \
 affinity binding), `mgpurun`, `slurm2pytorch` (derives PyTorch rendezvous env
 from SLURM), `fastcp` / `fastmd5` (threaded O_DIRECT copy and per-GB checksum),
 `dropcache`, plus log/telemetry shell helpers.
+
+**Don't delete `slurm2pytorch`.** datastage no longer needs it, but benchmarks
+outside this repo do, and it stays installed. `mlperf_common/dist_env.py` is the
+Python equivalent; the two must stay behaviourally compatible.
 
 These scripts import `direct_io` and `mlperf_common.fileio.copyplan` via a
 `sys.path` dance that works both for a pip install and for a source tree with

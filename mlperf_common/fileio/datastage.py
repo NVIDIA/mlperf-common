@@ -43,11 +43,20 @@ Usage mirrors cp/rsync and `fastcp`:
 
     python3 -m mlperf_common.fileio.datastage -r SRC... DST
 
-Launch with one task per GPU, under slurm2pytorch so that RANK / WORLD_SIZE /
-LOCAL_RANK / MASTER_ADDR are set:
+Launch with one task per GPU.  No wrapper is needed: mlperf_common.dist_env
+derives the rendezvous variables (RANK, WORLD_SIZE, LOCAL_RANK,
+LOCAL_WORLD_SIZE, MASTER_ADDR, MASTER_PORT) from slurm or mpirun, including
+parsing MASTER_ADDR out of slurm's nodelist, which is the one value slurm does
+not hand over directly.
 
-    srun --ntasks-per-node=${DGXNGPU} ... slurm2pytorch \\
+    srun --ntasks-per-node=${DGXNGPU} ... \\
         python3 -m mlperf_common.fileio.datastage -r "${SLOW_DATADIR}/${DATASET}" "${DATADIR}"
+
+--ntasks-per-node is effectively required for a multi-node copy: it is what
+tells us how many ranks share a node, and rather than guess we refuse.
+Launching under `slurm2pytorch` still works -- the variables are then already
+set, and are taken as given.  With no launcher at all, --dry-run prints the
+copy plan without touching CUDA.
 """
 
 import argparse
@@ -61,6 +70,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.distributed as dist
 
+from mlperf_common import dist_env
 from mlperf_common.fileio import direct_io
 from mlperf_common.fileio.copyplan import (
     CopyArgumentError, UnreadableEntries, plan_copy_operations, validate_copy_args)
@@ -704,7 +714,16 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
-    if args.dry_run and "RANK" not in os.environ:
+    # Same reasoning as the argument validation in parse_args: this runs on
+    # every rank before the process group exists and derives from environment
+    # alone, so a bad launch fails the whole job identically rather than
+    # leaving some ranks to block in a collective.
+    try:
+        env = dist_env.configure()
+    except dist_env.DistEnvError as exc:
+        sys.exit(f"datastage: {exc}")
+
+    if args.dry_run and env.source == "single":
         try:
             jobs = plan_copy_operations(args.sources, args.destination)
         except UnreadableEntries as exc:
@@ -713,7 +732,13 @@ def main(argv=None):
             print(f"{src} -> {dst} ({size} bytes)")
         return 0
 
-    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+    # Before init_process_group, not after: a wrong MASTER_ADDR hangs inside
+    # the rendezvous, so anything printed afterwards never appears -- and the
+    # rendezvous is exactly what this line is for diagnosing.
+    if env.rank == 0 or os.environ.get("NV_MLPERF_DEBUG"):
+        print(f"datastage: {dist_env.describe(env)}", flush=True)
+
+    torch.cuda.set_device(env.local_rank)
     dist.init_process_group(backend="nccl", init_method="env://")
     try:
         topology = Topology()
