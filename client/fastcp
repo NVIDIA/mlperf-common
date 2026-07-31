@@ -21,9 +21,24 @@ import tempfile
 import queue
 import threading
 
-# find direct_io in the same directory as this program
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Find direct_io next to this program, and mlperf_common one level up.  That
+# covers an install (setup.py installs the package and these scripts together,
+# so the package is importable) and a tree with mlperf_common/ next to client/,
+# which is both the source checkout and the "deploy the repo to a shared
+# filesystem and run client/ scripts in place" pattern.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(1, os.path.join(_HERE, os.pardir))
 import direct_io
+
+try:
+    from mlperf_common.fileio.copyplan import plan_copy_operations
+except ImportError as exc:
+    sys.exit(
+        f"fastcp: cannot import mlperf_common ({exc}).\n"
+        "fastcp needs the mlperf_common package: either install mlperf-common, "
+        "or run this script from a tree with mlperf_common/ alongside client/."
+    )
 
 def copy_worker(fd_src, fd_dst, buffer_size, workpile, thread_buffer, fs_block_size, thread_id):
     """Worker function to copy chunks from the workpile."""
@@ -165,50 +180,6 @@ def parse_and_validate_args():
 
     return args
 
-def list_relative_files(root):
-    """Return all file paths under 'root' as relative paths, sorted alphabetically.
-    os.walk(followlinks=True) allows following symlinked directories,
-    but it does not guard against cycles. This may cause infinite loops
-    if symlinks form a directory cycle.
-    """
-    file_list = []
-    # FIXME: os.walk(followlinks) doesn't protect against cycles
-    # to fix this we'd need to write our own version that did a depth-first
-    # spanning tree.
-    for dirpath, _, filenames in os.walk(root, followlinks=True):
-        for fname in filenames:
-            full_path = os.path.join(dirpath, fname)
-            rel_path = os.path.relpath(full_path, root)
-            file_list.append(rel_path)
-    return sorted(file_list)
-
-def plan_copy_operations(args):
-    """Return list of (src_abs, dst_abs, size_bytes) file tuples to copy."""
-    file_jobs = []
-    dst_root = os.path.abspath(args.destination)
-
-    if not os.path.isdir(dst_root):  # case 1: single file copy
-        src_abs = os.path.abspath(args.sources[0])
-        dst_abs = os.path.abspath(args.destination)
-        size = os.path.getsize(src_abs)
-        file_jobs.append((src_abs, dst_abs, size))
-    else:
-        for src in args.sources:
-            src_abs = os.path.abspath(src)
-            base = os.path.basename(src.rstrip("/"))
-            if os.path.isdir(src):
-                for relpath in list_relative_files(src):
-                    full_src = os.path.join(src_abs, relpath)
-                    full_dst = os.path.join(dst_root, base, relpath)
-                    size = os.path.getsize(full_src)
-                    file_jobs.append((full_src, full_dst, size))
-            else:
-                dst_path = os.path.join(dst_root, base)
-                size = os.path.getsize(src_abs)
-                file_jobs.append((src_abs, dst_path, size))
-
-    return file_jobs
-
 if __name__ == "__main__":
     args = parse_and_validate_args()
     # round buffer size up to next multiple of 2 MiB
@@ -219,7 +190,7 @@ if __name__ == "__main__":
     print(f"Sources: {args.sources}")
     print(f"Destination: {args.destination}")
 
-    file_jobs = plan_copy_operations(args)
+    file_jobs = plan_copy_operations(args.sources, args.destination)
 
     if not args.force:
         for _, dst, _ in file_jobs:
