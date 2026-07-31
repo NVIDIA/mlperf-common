@@ -446,6 +446,16 @@ class Stager:
             only released once all of its copies have landed; the writes carry
             on behind that against the host chunk pool.
             """
+            # CUDA's current device is per host thread, and main() set it on
+            # the main thread only, so this one starts out on device 0.  The
+            # copies below would still run on the right device -- the tensors
+            # carry it -- but torch.cuda.Event binds to the *calling thread's*
+            # current device when recorded, so the events would land on device
+            # 0's idle stream and every synchronize() on them would return
+            # immediately, letting the writers read chunks the copies have not
+            # filled yet.
+            torch.cuda.set_device(self.device)
+
             chunk_pending = [[] for _ in range(CHUNK_SLOTS)]
             try:  # noqa: PLR1702
                 while True:

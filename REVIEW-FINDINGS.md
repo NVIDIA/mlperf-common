@@ -35,7 +35,7 @@ Consequences:
 
 ## Tier 1 — silent data corruption
 
-- [ ] **F1 · `mlperf_common/fileio/datastage.py:476` · set_device missing on drainer thread**
+- [x] **F1 · `mlperf_common/fileio/datastage.py:476` · set_device missing on drainer thread** — fixed, see "F1 fix" below
 
   The drain thread never calls `torch.cuda.set_device`. CUDA's current device is
   per-host-thread, so on any rank with `LOCAL_RANK != 0` the thread sits on
@@ -53,8 +53,15 @@ Consequences:
   Fires on every multi-GPU node — independent of the distribution correction
   above. Fix first.
 
-  Not catchable by the suite today: `stubs.py` makes `FakeEvent.synchronize()` a
-  no-op. See F14/F15.
+  **F1 fix (2026-07-31).** `torch.cuda.set_device(self.device)` at the top of
+  `drainer()`. Guarded by `tests/test_device.py`, which models a per-thread
+  current device in the stubs and asserts every recorded event belongs to this
+  rank's device. Confirmed red before the fix (3 of 9 events on device 0 — the
+  drainer's, one per round) and green after.
+
+  Still unverified on hardware: no GPU was available. The test checks that the
+  threads agree on which device they are on, not CUDA ordering semantics. Worth
+  a multi-GPU confirmation run when a node is free.
 
 - [ ] **F2 · `mlperf_common/fileio/datastage.py:199` · new_group sorts its rank list** *(demoted — see premise correction)*
 

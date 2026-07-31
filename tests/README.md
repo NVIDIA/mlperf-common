@@ -18,6 +18,7 @@ Each test runs in its own interpreter, because each installs its own fake
 | `test_layout.py` | `FileLayout` tiles each file exactly once, with aligned boundaries |
 | `test_copyplan.py` | tree walk, src→dst mapping, refusal to plan an unreadable tree |
 | `test_pipeline.py` | `stage_file` end to end: bytes in == bytes out |
+| `test_device.py` | every CUDA event is recorded against this rank's device |
 | `stubs.py` | fake `torch` / `torch.distributed` so the above run on a CPU |
 
 ## Why the bytes are compared, not just the exit status
@@ -46,7 +47,12 @@ If you change the pipeline, confirm a deliberately reintroduced bug still makes
   all-gather by filling each node's segment with the bytes that node would have
   read, which is what the real collective delivers, but no data crosses a wire
 * real CUDA events, so no ordering bug between a copy and its consumer can show
-  up here; on the CPU every "copy" has already landed
+  up here; on the CPU every "copy" has already landed. `test_device.py` covers
+  the one part of this that *is* checkable without a GPU — which device each
+  event was recorded against, since `torch.cuda`'s current device is per host
+  thread and a thread that forgets `set_device` gets device 0. That caught a
+  real corruption bug in the drainer. It says nothing about whether the events
+  order the work correctly once they are on the right device
 * pinned memory, and whether it is aligned enough for a real filesystem block
   size
 * O_DIRECT itself — the tests reopen files buffered, since the fake buffers

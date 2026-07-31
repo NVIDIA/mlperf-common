@@ -31,6 +31,7 @@ import ctypes
 import importlib.util
 import os
 import sys
+import threading
 import types
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -74,14 +75,55 @@ class FakeTensor:
         return ctypes.addressof(self._buf) + self._offset
 
 
+class FakeDevice:
+    """Stand-in for torch.device('cuda', i).  datastage only ever passes it on."""
+
+    def __init__(self, kind="cuda", index=0):
+        self.type = kind
+        self.index = index
+
+    def __repr__(self):
+        return f"device(type={self.type!r}, index={self.index})"
+
+
+# CUDA's current device is per *host thread*, and a thread that never called
+# set_device gets device 0 no matter what any other thread did.  Modelling that
+# faithfully is the whole point: it is the property a thread doing CUDA work
+# can silently get wrong, and no amount of comparing staged bytes on a CPU will
+# show it up.
+_CURRENT = threading.local()
+
+# Every event that has been recorded, in order.  test_device.py checks which
+# device each one landed on; other tests ignore it.
+EVENTS = []
+
+
+def current_device():
+    return getattr(_CURRENT, "index", 0)
+
+
+def set_device(device):
+    _CURRENT.index = device.index if isinstance(device, FakeDevice) else int(device)
+
+
 class FakeEvent:
-    """CUDA event stand-in: everything is synchronous on the CPU already."""
+    """CUDA event stand-in: everything is synchronous on the CPU already.
+
+    It does track one thing that is not synchronous, though.  A real
+    torch.cuda.Event is created lazily and binds to the *calling thread's*
+    current device when it is recorded -- not to the device the work it is
+    meant to track ran on.  So an event recorded by a thread that forgot
+    set_device belongs to an idle stream on device 0, and synchronize() on it
+    returns immediately while the copy it stands for is still in flight.
+    Remembering the device here is what lets a test see that.
+    """
 
     def __init__(self, blocking=False):
-        pass
+        self.device = None
 
     def record(self):
-        pass
+        self.device = current_device()
+        EVENTS.append(self)
 
     def synchronize(self):
         pass
@@ -95,11 +137,11 @@ def install(total_memory=288 * 1024 ** 3):
     torch.int64 = "int64"
     torch.distributed = dist
     torch.empty = lambda n, dtype=None, device=None, pin_memory=False: FakeTensor(n)
-    torch.device = lambda *args, **kwargs: "cpu"
+    torch.device = lambda kind="cuda", index=0: FakeDevice(kind, index)
     torch.cuda = types.SimpleNamespace(
         Event=FakeEvent,
-        current_device=lambda: 0,
-        set_device=lambda device: None,
+        current_device=current_device,
+        set_device=set_device,
         get_device_properties=lambda device: types.SimpleNamespace(
             total_memory=total_memory),
     )
