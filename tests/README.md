@@ -69,3 +69,25 @@ If you change the pipeline, confirm a deliberately reintroduced bug still makes
 
 A green run means the arithmetic and the choreography are right. It says
 nothing about whether staging works on a cluster.
+
+## The other half: `cluster-selftest.sh`
+
+Not part of `run_tests.py` — it needs an allocation. It builds a dataset with
+the shapes that have historically broken things (sizes either side of the
+2 MiB boundary, a zero-length file, files large enough to need several rounds,
+64 small ones, a symlink), stages it with a real multi-node `srun`, and then
+checks on **every node** that the node-local copy matches the source:
+
+```bash
+salloc -N2 --ntasks-per-node=4 ...
+tests/cluster-selftest.sh /lustre/scratch/me/selftest /raid/scratch/me/selftest
+```
+
+It compares two things, not one. `fastmd5` emits one line per GB-chunk, so a
+zero-length file produces no lines at all and a destination missing it would
+compare equal on checksums alone — the size-and-path listing is what catches
+that. It also asserts no `.datastage.tmp.*` files survive and that everything
+is mode 0777.
+
+This is the only thing that exercises real NCCL, real CUDA events, pinned
+memory against a real block size, and O_DIRECT. Nothing above does.

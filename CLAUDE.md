@@ -21,6 +21,9 @@ Two mostly independent halves live here:
 python3 tests/run_tests.py          # whole suite (stdlib only, no pytest, no GPU)
 python3 tests/test_pipeline.py      # one test file, directly
 
+# real hardware, from inside an allocation; not part of run_tests.py
+tests/cluster-selftest.sh /lustre/scratch/me/selftest /raid/scratch/me/selftest
+
 make -C src                         # build the C++ tools
 make -C src install prefix=/usr/local
 
