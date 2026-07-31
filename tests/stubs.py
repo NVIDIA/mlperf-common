@@ -77,16 +77,6 @@ class FakeTensor:
         return ctypes.addressof(self._buf) + self._offset
 
 
-class FakeCounter:
-    """What torch.tensor([n]) is used for here: a scalar to all_reduce."""
-
-    def __init__(self, values):
-        self._values = list(values)
-
-    def item(self):
-        return self._values[0]
-
-
 class FakeDevice:
     """Stand-in for torch.device('cuda', i).  datastage only ever passes it on."""
 
@@ -219,7 +209,6 @@ def install(total_memory=288 * 1024 ** 3):
     torch.int64 = "int64"
     torch.distributed = dist
     torch.empty = lambda n, dtype=None, device=None, pin_memory=False: FakeTensor(n)
-    torch.tensor = lambda values, dtype=None, device=None: FakeCounter(values)
     torch.device = lambda kind="cuda", index=0: FakeDevice(kind, index)
     torch.cuda = types.SimpleNamespace(
         Event=FakeEvent,
@@ -234,7 +223,6 @@ def install(total_memory=288 * 1024 ** 3):
     dist.barrier = lambda *args, **kwargs: None
     dist.get_rank = lambda: 0
     dist.broadcast_object_list = lambda payload, src=0: None
-    dist.all_reduce = lambda tensor: None
     dist.all_gather_into_tensor = lambda out, inp, group=None: out.copy_(inp)
     sys.modules["torch"] = torch
     sys.modules["torch.distributed"] = dist

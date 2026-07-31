@@ -305,6 +305,38 @@ Consequences:
   thing they have already done. The compatibility path the shim exists for is
   dead in exactly the case it was written for.
 
+## Found during the work, not by the review
+
+- [x] **F16 · `mlperf_common/fileio/datastage.py` · the cross-rank source check was a metadata storm** — removed
+
+  `build_plan` had every rank stat every file and all-reduce a mismatch count,
+  to catch ranks seeing a different view of shared storage. That is `W × F`
+  stats issued as a synchronised burst: 5.1M at 64 nodes / 10k files, 41M at
+  512 nodes, 1.6 **billion** at 2048 nodes / 100k files. At a generous 50k
+  ops/s for one MDT that is ~14 minutes of pure metadata at 512 nodes before a
+  byte moves, and at 2048 it takes the MDT down for every other job on the
+  filesystem too.
+
+  The cost scaled with the file count; the detection power did not. The
+  condition it looked for — a stale handle, a failed mount, the wrong dataset
+  at the same path — is per-mount, and affects every file on that node
+  identically. It was also imperfect: size and mtime miss same-size,
+  same-mtime content differences.
+
+  **Removed entirely (2026-07-31, Matt's call).** Reasons: mount verification
+  already belongs to `mountcheck.py`, once per job, where a sparse SHA256
+  fingerprint is cheaper *and* stronger; subtle mount errors of this kind have
+  not occurred in six years on these clusters; and the planned direction is for
+  small files to be handled by a single rank each, which makes any per-rank
+  per-file metadata work the wrong shape regardless.
+
+  Rationale recorded in `build_plan`'s docstring so it does not get reinvented.
+  `torch.tensor`, `FakeCounter` and `dist.all_reduce` left the stubs with it.
+
+  Worth noting the review did not find this — 49 agents, none reasoning about
+  filesystem load. Staging still does `W × F` opens, which is inherent to
+  having W disjoint readers; this was pure addition on top.
+
 ## Tier 4 — the tests can't catch the above
 
 - [ ] **F14 · `tests/test_pipeline.py:90` · fake all-gather re-reads the source**

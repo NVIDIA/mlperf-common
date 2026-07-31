@@ -594,7 +594,22 @@ class Stager:
 
 
 def build_plan(args):
-    """Rank 0 walks the source tree; everyone else takes its answer verbatim."""
+    """Rank 0 walks the source tree; everyone else takes its answer verbatim.
+
+    Verbatim, and unverified: there is deliberately no cross-rank check that
+    the other ranks see the same sizes and mtimes rank 0 saw.  Such a check
+    costs one stat per rank per file -- at 2048 nodes and 100k files, 1.6
+    billion metadata operations issued as a synchronised burst, which is the
+    worst pattern there is for a Lustre MDT and would take it down for every
+    other job on the filesystem, not just this one.
+
+    What it would detect is a node with a stale handle or the wrong dataset
+    mounted, and that condition is per-mount: it affects every file on that
+    node identically, so the cost scales with the file count while the
+    detection power does not.  Verifying mounts belongs to mountcheck.py, once
+    per job, where a sparse SHA256 fingerprint is both cheaper and stronger
+    than size and mtime.
+    """
     if dist.get_rank() == 0:
         # A planning failure has to be broadcast rather than raised here: every
         # other rank is already waiting in the broadcast below, so anything
@@ -620,26 +635,7 @@ def build_plan(args):
     dist.broadcast_object_list(payload, src=0)
     if isinstance(payload[0], dict):
         raise RuntimeError(f"cannot stage the source tree: {payload[0]['error']}")
-    jobs = payload[0]
-
-    # Guard against ranks seeing a different view of shared storage.
-    mismatches = 0
-    for src, _, size, mtime_ns in jobs:
-        try:
-            st = os.stat(src)
-        except OSError:
-            mismatches += 1
-            continue
-        if st.st_size != size or st.st_mtime_ns != mtime_ns:
-            mismatches += 1
-    counter = torch.tensor([mismatches], dtype=torch.int64, device="cuda")
-    dist.all_reduce(counter)
-    if counter.item():
-        raise RuntimeError(
-            f"{counter.item()} rank/file pairs disagree with rank 0 about the "
-            "source tree; shared storage is inconsistent or changing"
-        )
-    return jobs
+    return payload[0]
 
 
 def parse_args(argv=None):
