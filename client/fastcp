@@ -32,7 +32,7 @@ sys.path.insert(1, os.path.join(_HERE, os.pardir))
 import direct_io
 
 try:
-    from mlperf_common.fileio.copyplan import plan_copy_operations
+    from mlperf_common.fileio.copyplan import UnreadableEntries, plan_copy_operations
 except ImportError as exc:
     sys.exit(
         f"fastcp: cannot import mlperf_common ({exc}).\n"
@@ -190,7 +190,10 @@ if __name__ == "__main__":
     print(f"Sources: {args.sources}")
     print(f"Destination: {args.destination}")
 
-    file_jobs = plan_copy_operations(args.sources, args.destination)
+    try:
+        file_jobs = plan_copy_operations(args.sources, args.destination)
+    except UnreadableEntries as exc:
+        sys.exit(f"fastcp: {exc}")
 
     if not args.force:
         for _, dst, _ in file_jobs:

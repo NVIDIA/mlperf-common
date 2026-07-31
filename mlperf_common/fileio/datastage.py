@@ -63,7 +63,7 @@ import torch
 import torch.distributed as dist
 
 from mlperf_common.fileio import direct_io
-from mlperf_common.fileio.copyplan import plan_copy_operations
+from mlperf_common.fileio.copyplan import UnreadableEntries, plan_copy_operations
 
 # Buffer alignment.  2 MiB is the Linux huge page size, comfortably above any
 # filesystem block size we will meet, so O_DIRECT is always happy.  Same
@@ -440,11 +440,20 @@ class Stager:
 def build_plan(args):
     """Rank 0 walks the source tree; everyone else takes its answer verbatim."""
     if dist.get_rank() == 0:
-        jobs = plan_copy_operations(args.sources, args.destination)
-        payload = [[(src, dst, size, os.stat(src).st_mtime_ns) for src, dst, size in jobs]]
+        # A planning failure has to be broadcast rather than raised here: every
+        # other rank is already waiting in the broadcast below and would hang
+        # until the NCCL watchdog fired.
+        try:
+            jobs = plan_copy_operations(args.sources, args.destination)
+            payload = [[(src, dst, size, os.stat(src).st_mtime_ns)
+                        for src, dst, size in jobs]]
+        except UnreadableEntries as exc:
+            payload = [{"error": str(exc)}]
     else:
         payload = [None]
     dist.broadcast_object_list(payload, src=0)
+    if isinstance(payload[0], dict):
+        raise RuntimeError(f"cannot stage the source tree: {payload[0]['error']}")
     jobs = payload[0]
 
     # Guard against ranks seeing a different view of shared storage.
@@ -518,7 +527,11 @@ def main(argv=None):
     args = parse_args(argv)
 
     if args.dry_run and "RANK" not in os.environ:
-        for src, dst, size in plan_copy_operations(args.sources, args.destination):
+        try:
+            jobs = plan_copy_operations(args.sources, args.destination)
+        except UnreadableEntries as exc:
+            sys.exit(f"datastage: {exc}")
+        for src, dst, size in jobs:
             print(f"{src} -> {dst} ({size} bytes)")
         return 0
 

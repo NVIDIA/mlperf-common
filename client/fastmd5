@@ -18,7 +18,7 @@ sys.path.insert(1, os.path.join(_HERE, os.pardir))
 import direct_io # for pread(), allocate_aligned_buffers(), round_up()
 
 try:
-    from mlperf_common.fileio.copyplan import list_relative_files
+    from mlperf_common.fileio.copyplan import UnreadableEntries, list_relative_files
 except ImportError as exc:
     sys.exit(
         f"fastmd5: cannot import mlperf_common ({exc}).\n"
@@ -107,7 +107,11 @@ def main():
     # staged copy compares the same set of files the copy was planned from.
     for original_arg in args.paths:
         if os.path.isdir(original_arg):
-            for relpath in list_relative_files(original_arg):
+            try:
+                relpaths = list_relative_files(original_arg)
+            except UnreadableEntries as exc:
+                sys.exit(f"fastmd5: {exc}")
+            for relpath in relpaths:
                 full_path = os.path.join(original_arg, relpath)
                 enqueue_file_chunks(full_path, full_path, CHUNK_SIZE, workpile)
         else:
