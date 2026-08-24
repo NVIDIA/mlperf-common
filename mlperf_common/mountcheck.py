@@ -17,8 +17,10 @@
 import argparse
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 
 class Level(Enum):
@@ -111,7 +113,25 @@ def is_hidden(path: Path) -> bool:
     return path.name.startswith(".")
 
 
-def scan(path: Path, key: str, root: Path) -> list[dict]:
+def files_in(path: Path) -> list[Path]:
+    if is_hidden(path):
+        return []
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        files = []
+        for sub_path in sorted(path.glob("*")):
+            files += files_in(sub_path)
+        return files
+    raise RuntimeError(f"{repr(path)} is not a file nor a dir!")
+
+
+def scan(
+    path: Path,
+    key: str,
+    root: Path,
+    fingerprints: Optional[dict[Path, dict]] = None,
+) -> list[dict]:
     if is_hidden(path):
         return []
     if path.is_file():
@@ -121,12 +141,16 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
         row["relative_path"] = str(path.relative_to(root))
         row["full_path"] = str(path)
         row["num_files"] = 1
-        row.update(fingerprint_file(path))
+        row.update(
+            fingerprint_file(path)
+            if fingerprints is None or path not in fingerprints
+            else fingerprints[path]
+        )
         return [row]
     elif path.is_dir():
         rows = []
         for sub_path in sorted(path.glob("*")):
-            rows += scan(sub_path, key, root)
+            rows += scan(sub_path, key, root, fingerprints)
         row = {}
         row["key"] = key
         row["type"] = "dir"
@@ -149,9 +173,16 @@ def scan(path: Path, key: str, root: Path) -> list[dict]:
 
 
 def inspect(mounts_to_verify: list[str]) -> list[dict]:
+    mappings = split(mounts_to_verify)
+    files = []
+    for path in mappings.values():
+        files += files_in(path)
+    with ThreadPoolExecutor() as executor:
+        fingerprints = dict(zip(files, executor.map(fingerprint_file, files)))
+
     rows = []
-    for key, path in split(mounts_to_verify).items():
-        rows += scan(path, key, path)
+    for key, path in mappings.items():
+        rows += scan(path, key, path, fingerprints)
     return rows
 
 
