@@ -73,8 +73,8 @@ def check_cp_semantics(root):
     absent = os.path.join(base, "newdir")
 
     def plan(sources, destination, **kwargs):
-        jobs = copyplan.plan_copy_operations(sources, destination, **kwargs)
-        return sorted(os.path.relpath(dst, base) for _, dst, _ in jobs)
+        plan = copyplan.plan_copy_operations(sources, destination, **kwargs)
+        return sorted(os.path.relpath(dst, base) for _, dst, _ in plan.files)
 
     # cp -r src newdir, newdir absent: the contents land directly in newdir,
     # with no basename level.  This is the case that used to plan a single
@@ -169,6 +169,47 @@ def check_unlistable_directory(root):
         os.chmod(os.path.join(source, "secret"), 0o755)
 
 
+def check_empty_directories(root):
+    """Directories with no files under them still have to be created.
+
+    Nothing in `files` implies them -- that is the whole point -- so a planner
+    that reported only files produced a destination tree quietly missing every
+    empty directory, and for a wholly empty source produced no jobs at all and
+    never created the destination.  cp -r creates it, and exits 0 either way,
+    so a caller checking the exit status could not tell.
+    """
+    base = os.path.join(root, "emptydirs")
+    source = os.path.join(base, "src")
+    os.makedirs(os.path.join(source, "sub", "deep", "leaf"))
+    os.makedirs(os.path.join(source, "lonely"))
+    with open(os.path.join(source, "sub", "f.txt"), "w") as fh:
+        fh.write("x")
+
+    plan = copyplan.plan_copy_operations([source], os.path.join(base, "dst"))
+    rel = {os.path.relpath(d, os.path.join(base, "dst")) for d in plan.directories}
+    check("empty directories appear in the plan",
+          {"lonely", os.path.join("sub", "deep"), os.path.join("sub", "deep", "leaf")} <= rel,
+          f"got {sorted(rel)}")
+    check("a directory holding a file is planned too", "sub" in rel)
+    check("directories are shallowest first",
+          list(plan.directories) == sorted(plan.directories))
+
+    # A source with no files at all still has to produce the destination.
+    empty_src = os.path.join(base, "wholly-empty")
+    os.makedirs(empty_src)
+    empty_dst = os.path.join(base, "newdir")
+    plan = copyplan.plan_copy_operations([empty_src], empty_dst)
+    check("an empty source plans no file jobs", plan.files == [])
+    check("an empty source still plans its destination directory",
+          empty_dst in plan.directories, f"got {plan.directories}")
+
+    # list_relative_entries shares one walk; the files half must not drift
+    # from what list_relative_files reports.
+    entries = copyplan.list_relative_entries(source)
+    check("list_relative_files agrees with list_relative_entries",
+          entries.files == copyplan.list_relative_files(source))
+
+
 def main():
     root = tempfile.mkdtemp(prefix="copyplan-")
     try:
@@ -185,18 +226,19 @@ def main():
 
         destination = os.path.join(root, "dst")
         os.makedirs(destination)
-        jobs = copyplan.plan_copy_operations([source], destination)
+        plan = copyplan.plan_copy_operations([source], destination)
         check("every planned file lands under dest/<basename>/",
               all(dst.startswith(os.path.join(destination, "src") + os.sep)
-                  for _, dst, _ in jobs))
+                  for _, dst, _ in plan.files))
         check("plan is sorted by destination",
-              [j[1] for j in jobs] == sorted(j[1] for j in jobs))
-        check("sizes come back with the plan", all(size == 10 for _, _, size in jobs))
+              [j[1] for j in plan.files] == sorted(j[1] for j in plan.files))
+        check("sizes come back with the plan",
+              all(size == 10 for _, _, size in plan.files))
 
         single = copyplan.plan_copy_operations(
             [os.path.join(source, "a.bin")], os.path.join(destination, "renamed.bin"))
         check("file-to-file copy keeps the given destination name",
-              len(single) == 1 and single[0][1].endswith("renamed.bin"))
+              len(single.files) == 1 and single.files[0][1].endswith("renamed.bin"))
 
         # Dangling symlinks: os.walk lists them among the filenames because they
         # are not directories, and stat then follows them to nothing.
@@ -219,6 +261,7 @@ def main():
 
         check_cp_semantics(root)
         check_unlistable_directory(root)
+        check_empty_directories(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

@@ -36,6 +36,7 @@ The semantics are GNU cp's, which is what fastcp set out to match:
     cp -r src file                       -> error, cannot overwrite non-directory
 """
 
+import collections
 import os
 
 __all__ = ["CopyArgumentError", "UnreadableEntries", "list_relative_files",
@@ -67,6 +68,11 @@ class UnreadableEntries(Exception):
         if count > _MAX_REPORTED:
             lines.append(f"    ... and {count - _MAX_REPORTED} more")
         return "\n".join(lines)
+
+
+TreeEntries = collections.namedtuple("TreeEntries", ("files", "directories"))
+
+CopyPlan = collections.namedtuple("CopyPlan", ("files", "directories"))
 
 
 class CopyArgumentError(Exception):
@@ -149,7 +155,19 @@ def list_relative_files(root):
     -- which also drops the duplicates.  Not worth it until a dataset actually
     contains such a link.
     """
+    return list_relative_entries(root).files
+
+
+def list_relative_entries(root):
+    """Return a TreeEntries(files, directories) of paths relative to `root`.
+
+    One walk yields both.  Directories matter because a copy has to recreate
+    an empty one -- there is no file under it to imply it -- and walking a
+    second time to find them would double the metadata load on the shared
+    filesystem, which for a dataset of millions of files is the expensive part.
+    """
     file_list = []
+    dir_list = []
     problems = []
 
     def unlistable(exc):
@@ -162,26 +180,34 @@ def list_relative_files(root):
         # that agrees with it.
         problems.append((exc.filename or root, exc.strerror or str(exc)))
 
-    for dirpath, _, filenames in os.walk(root, followlinks=True, onerror=unlistable):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True, onerror=unlistable):
+        if dirpath != root:
+            dir_list.append(os.path.relpath(dirpath, root))
         for fname in filenames:
             full_path = os.path.join(dirpath, fname)
             if _stat_or_problem(full_path, problems) is not None:
                 file_list.append(os.path.relpath(full_path, root))
+        dirnames.sort()
     if problems:
         raise UnreadableEntries(problems)
-    return sorted(file_list)
+    return TreeEntries(sorted(file_list), sorted(dir_list))
 
 
 def plan_copy_operations(sources, destination):
-    """Return a list of (src_abs, dst_abs, size_bytes) tuples to copy.
+    """Return a CopyPlan: (src_abs, dst_abs, size_bytes) jobs, and dirs to create.
 
     If `destination` is an existing directory each source is placed inside it
     under its own basename (recursing into directories).  Otherwise there is
     exactly one source and `destination` names it directly: a file is copied to
     that name, and a directory has its *contents* copied in under it, which is
-    what `cp -r src newdir` does when newdir does not yet exist.  The result is
-    sorted by destination path so that every rank of a collective copy walks
-    the files in the same order.
+    what `cp -r src newdir` does when newdir does not yet exist.  `files` is
+    sorted by destination path so that any two tools planning the same copy
+    walk it in the same order.
+
+    `directories` holds every destination directory the copy needs, shallowest
+    first, and is not derivable from `files`: an empty source directory has no
+    file under it to imply its parent, but `cp -r` still creates it.  Create
+    them before copying rather than calling makedirs per file.
 
     Raises CopyArgumentError if the arguments are not a combination cp would
     accept, and UnreadableEntries if any source cannot be stat'd or any
@@ -190,6 +216,7 @@ def plan_copy_operations(sources, destination):
     validate_copy_args(sources, destination)
 
     file_jobs = []
+    dst_dirs = set()
     problems = []
     dst_root = os.path.abspath(destination)
 
@@ -197,6 +224,10 @@ def plan_copy_operations(sources, destination):
         st = _stat_or_problem(src_abs, problems)
         if st is not None:
             file_jobs.append((src_abs, dst_abs, st.st_size))
+            # Every file implies its parent.  Collecting them here means the
+            # caller can create the whole tree up front instead of calling
+            # makedirs once per file.
+            dst_dirs.add(os.path.dirname(dst_abs))
 
     if not os.path.isdir(dst_root):
         # Validation has established there is exactly one source and, if it is
@@ -206,10 +237,15 @@ def plan_copy_operations(sources, destination):
         src_abs = os.path.abspath(sources[0])
         if os.path.isdir(src_abs):
             try:
-                for relpath in list_relative_files(src_abs):
-                    add(os.path.join(src_abs, relpath), os.path.join(dst_root, relpath))
+                entries = list_relative_entries(src_abs)
             except UnreadableEntries as exc:
                 problems.extend(exc.entries)
+            else:
+                dst_dirs.add(dst_root)
+                for relpath in entries.files:
+                    add(os.path.join(src_abs, relpath), os.path.join(dst_root, relpath))
+                for relpath in entries.directories:
+                    dst_dirs.add(os.path.join(dst_root, relpath))
         else:
             add(src_abs, dst_root)
     else:
@@ -218,16 +254,21 @@ def plan_copy_operations(sources, destination):
             base = os.path.basename(src.rstrip("/"))
             if os.path.isdir(src):
                 try:
-                    relpaths = list_relative_files(src)
+                    entries = list_relative_entries(src)
                 except UnreadableEntries as exc:
                     problems.extend(exc.entries)
                     continue
-                for relpath in relpaths:
+                dst_dirs.add(os.path.join(dst_root, base))
+                for relpath in entries.files:
                     add(os.path.join(src_abs, relpath),
                         os.path.join(dst_root, base, relpath))
+                for relpath in entries.directories:
+                    dst_dirs.add(os.path.join(dst_root, base, relpath))
             else:
                 add(src_abs, os.path.join(dst_root, base))
 
     if problems:
         raise UnreadableEntries(problems)
-    return sorted(file_jobs, key=lambda job: job[1])
+    # Shallowest first, so creating them in order never needs a parent that
+    # does not exist yet.
+    return CopyPlan(sorted(file_jobs, key=lambda job: job[1]), sorted(dst_dirs))

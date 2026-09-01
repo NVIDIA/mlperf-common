@@ -185,16 +185,20 @@ if __name__ == "__main__":
     print(f"Destination: {args.destination}")
 
     try:
-        file_jobs = plan_copy_operations(args.sources, args.destination)
+        plan = plan_copy_operations(args.sources, args.destination)
     except UnreadableEntries as exc:
         sys.exit(f"fastcp: {exc}")
 
     if not args.force:
-        for _, dst, _ in file_jobs:
+        for _, dst, _ in plan.files:
             if os.path.exists(dst):
                 sys.exit(f"{os.path.basename(sys.argv[0])}: will not overwrite existing file '{dst}' without --force")
 
-    for src, dst, size in file_jobs:
+    # Up front, and shallowest first, so that an empty source directory is
+    # recreated even though no file names it -- cp -r creates it too.
+    for dirpath in plan.directories:
+        os.makedirs(dirpath, exist_ok=True)
+
+    for src, dst, size in plan.files:
         print(f"Copy {src} -> {dst} ({size} bytes)")
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
         fastcp(src, dst, args.num_threads, args.buffer_size)
