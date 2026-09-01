@@ -74,8 +74,9 @@ Anything needing torch belongs in a module of its own.
   partial copy that exits 0 — and then a checksum run that skips the same files
   and agrees with it.
 
-`BUFFER_ALIGN = 2 MiB` (the huge-page size) is the shared alignment constant
-across `fastcp` and `fastmd5`.
+Both tools align to 2 MiB, the Linux huge-page size. It is *not* a shared
+constant -- it is hardcoded in each (`fastcp:90,180`, `fastmd5:44,121`). Worth
+promoting into `direct_io` next to `round_up`, so the two cannot drift.
 
 This package was extracted from `fastcp` and `fastmd5`, which had been carrying
 their own copies. Keep the two scripts going through it rather than reintroducing
@@ -83,11 +84,21 @@ private variants.
 
 ### client/ and src/
 
-`client/` holds scripts installed onto `PATH` by `setup.py`: `bindpcie` (NUMA/IB
-affinity binding), `mgpurun`, `slurm2pytorch` (derives PyTorch rendezvous env
-from SLURM), `fastcp` / `fastmd5` (threaded copy and per-GB checksum; `fastcp` opens with
-O_DIRECT, `fastmd5` does not),
-`dropcache`, plus log/telemetry shell helpers.
+`client/` holds the single-node scripts. `setup.py`'s `scripts=` installs
+`bindpcie` (NUMA/IB affinity binding), `mgpurun`, `slurm2pytorch` (derives
+PyTorch rendezvous env from SLURM), `fastcp`, `direct_io.py`, and the
+log/telemetry shell helpers.
+
+**`fastmd5` and `dropcache` are in `client/` but are NOT in `scripts=`**, so a
+`pip install` does not produce them -- the only supported way to run `fastmd5`
+is in place from a checkout. That matters more now that it hard-depends on the
+package, because its own ImportError advice says "install mlperf-common", a
+remedy that never yields a `fastmd5`. Either add it to `scripts=` or fix the
+message; don't leave both.
+
+`fastcp` and `fastmd5` are a threaded copy and a per-GB checksum. `fastcp`
+opens with O_DIRECT; `fastmd5` does not, despite using the same aligned-buffer
+machinery.
 
 **Don't delete `slurm2pytorch`.** Benchmarks outside this repo depend on it and
 it stays installed, even though nothing in this repo calls it.
