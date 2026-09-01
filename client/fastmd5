@@ -6,11 +6,25 @@ import sys
 import queue
 import hashlib
 import threading
-from pathlib import Path
 
-# find direct_io in the same directory as this program
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Find direct_io next to this program, and mlperf_common one level up.  That
+# covers an install (setup.py installs the package and these scripts together,
+# so the package is importable) and a tree with mlperf_common/ next to client/,
+# which is both the source checkout and the "deploy the repo to a shared
+# filesystem and run client/ scripts in place" pattern.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(1, os.path.join(_HERE, os.pardir))
 import direct_io # for pread(), allocate_aligned_buffers(), round_up()
+
+try:
+    from mlperf_common.fileio.copyplan import UnreadableEntries, list_relative_files
+except ImportError as exc:
+    sys.exit(
+        f"fastmd5: cannot import mlperf_common ({exc}).\n"
+        "fastmd5 needs the mlperf_common package: either install mlperf-common, "
+        "or run this script from a tree with mlperf_common/ alongside client/."
+    )
 
 def parse_and_validate_args():
     """Parse command-line arguments. Always assume recursive for directories."""
@@ -47,30 +61,41 @@ def enqueue_file_chunks(display_name, actual_path, chunk_size, workpile):
         this_chunk = min(chunk_size, size - offset)
         workpile.put((display_name, offset, this_chunk, block_size))
 
-def checksum_worker(thread_id, buffer, workpile, buffer_size, print_lock):
-    """Worker function to compute md5 checksums of file chunks."""
+def checksum_worker(thread_id, buffer, workpile, buffer_size, print_lock, errors):
+    """Worker function to compute md5 checksums of file chunks.
+
+    A failure here must not be silent: an exception escaping a thread does not
+    affect the process exit status, so a caller comparing two trees would see
+    a short but successful-looking result.  Record it instead and let main()
+    exit nonzero.
+    """
     while True:
         try:
             filepath, offset, size, fs_block_size = workpile.get_nowait()
         except queue.Empty:
             return
 
-        md5 = hashlib.md5()
+        try:
+            md5 = hashlib.md5()
 
-        with open(filepath, 'rb') as f:
-            fd = f.fileno()
-            remaining = size
-            local_offset = offset
-            while remaining > 0:
-                this_read = min(remaining, buffer_size)
-                bytes_read = direct_io.pread(fd, buffer, this_read, local_offset, fs_block_size, thread_id)
-                assert bytes_read == this_read, f"pread returned {bytes_read}, expected {this_read}"
-                md5.update(buffer[:this_read])
-                local_offset += this_read
-                remaining -= this_read
+            with open(filepath, 'rb') as f:
+                fd = f.fileno()
+                remaining = size
+                local_offset = offset
+                while remaining > 0:
+                    this_read = min(remaining, buffer_size)
+                    bytes_read = direct_io.pread(fd, buffer, this_read, local_offset, fs_block_size, thread_id)
+                    assert bytes_read == this_read, f"pread returned {bytes_read}, expected {this_read}"
+                    md5.update(buffer[:this_read])
+                    local_offset += this_read
+                    remaining -= this_read
 
-        with print_lock:
-            print(f"{filepath}\t{offset}\t{size}\t{md5.hexdigest()}")
+            with print_lock:
+                print(f"{filepath}\t{offset}\t{size}\t{md5.hexdigest()}")
+        except Exception as exc:  # noqa: BLE001 - reported and re-surfaced by main()
+            errors.append((filepath, offset, exc))
+            with print_lock:
+                print(f"fastmd5: {filepath} at offset {offset}: {exc}", file=sys.stderr)
         workpile.task_done()
 
 def main():
@@ -78,16 +103,19 @@ def main():
     workpile = queue.Queue()
     CHUNK_SIZE = 1 << 30  # 1 GiB
 
-    for root in args.paths:
-        original_arg = root
-        path = Path(original_arg)
-        if path.is_dir():
-            for file in path.rglob('*'):
-                if file.is_file() or file.is_symlink():
-                    display_name = os.path.join(original_arg, os.path.relpath(file, path))
-                    enqueue_file_chunks(display_name, file, CHUNK_SIZE, workpile)
-        elif path.is_file() or path.is_symlink():
-            enqueue_file_chunks(original_arg, path, CHUNK_SIZE, workpile)
+    # Share the tree walk with fastcp, so that checksumming a copy compares the
+    # same set of files the copy was planned from.
+    for original_arg in args.paths:
+        if os.path.isdir(original_arg):
+            try:
+                relpaths = list_relative_files(original_arg)
+            except UnreadableEntries as exc:
+                sys.exit(f"fastmd5: {exc}")
+            for relpath in relpaths:
+                full_path = os.path.join(original_arg, relpath)
+                enqueue_file_chunks(full_path, full_path, CHUNK_SIZE, workpile)
+        else:
+            enqueue_file_chunks(original_arg, original_arg, CHUNK_SIZE, workpile)
 
     # Prepare aligned buffers for each thread
     alignment = 2 * 1024 * 1024  # 2 MiB
@@ -100,14 +128,20 @@ def main():
 
     # Launch worker threads
     print_lock = threading.Lock()
+    errors = []  # list.append is atomic, so no lock needed
     threads = []
     for i in range(args.num_threads):
-        t = threading.Thread(target=checksum_worker, args=(i, thread_buffers[i], workpile, args.buffer_size, print_lock))
+        t = threading.Thread(target=checksum_worker, args=(i, thread_buffers[i], workpile, args.buffer_size, print_lock, errors))
         t.start()
         threads.append(t)
 
     for t in threads:
         t.join()
+
+    if errors:
+        print(f"fastmd5: {len(errors)} chunk(s) failed; output is incomplete",
+              file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
