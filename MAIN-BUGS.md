@@ -125,6 +125,23 @@ ls /tmp/t5/dst/src           # 'plain' only; 'hollow' is missing.  exit was 0.
 `cp -r` recreates it. Fixed on the PR #43 branch (commit `01f4634`) by planning
 directories alongside files; `main` is still affected.
 
+**Correcting `01f4634`'s commit message,** which calls this "a regression the
+fileio extraction introduced". That is only half true, and the halves differ:
+
+| case | `main` | before `01f4634` | after |
+| --- | --- | --- | --- |
+| DEST exists, source has an empty subdir | exit 0, subdir missing | exit 0, subdir missing | exit 0, created |
+| DEST absent, source wholly empty | **exit 1**, loud | exit 0, DEST never created | exit 0, created |
+
+So the first row is a defect `main` already had and the extraction carried
+across unchanged — it belongs in this file, which is why it is here. Only the
+second row regressed, and it regressed in the way that matters most: `main`
+failed loudly enough for a caller checking the exit status to notice, and the
+refactor turned that into a silent success with an incomplete tree.
+
+The fix is correct for both rows. Only the commit message overstated its scope,
+and it is not worth a force-push to reword.
+
 ## 6. Duplicate destination names clobber without `--force`
 
 `fastcp x/same y/same dst` writes both to `dst/same`, last writer wins, exit 0.
