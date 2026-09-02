@@ -5,8 +5,8 @@ Found reviewing the `mlperf_common.fileio` extraction (PR #43).
 Everything here was **introduced by that extraction** — each item was checked
 against `main`'s pre-refactor `client/fastcp` and does not occur there. The much
 longer list of defects this code inherited from `main` is deliberately *not*
-here: those predate the refactor, are not this branch's to fix, and are tracked
-separately.
+here: those predate the refactor and are not this branch's to fix. They are
+recorded in `MAIN-BUGS.md`.
 
 `direct_io.py` is byte-identical to `main`'s modulo comments, so nothing in it
 is a new defect.
