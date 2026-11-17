@@ -276,6 +276,17 @@ def verify_actual_mounts(
                 f"{actual['full_path']} {key} mismatch! expected={expected[key]} actual={actual[key]}",
             )
 
+        # The sparse fingerprint does not cover the file size: files up to
+        # num_samples * slice_size bytes are hashed from their first slice only,
+        # so truncating or extending them past that slice keeps the hash.
+        # num_bytes is already in the CSV, so compare it for files and dirs.
+        if expected["num_bytes"] != actual["num_bytes"]:
+            print_check(
+                verbosity,
+                Level.WARNING,
+                f"{actual['full_path']} num bytes mismatch! expected={expected['num_bytes']} actual={actual['num_bytes']}",
+            )
+
         if expected["type"] == "dir":
             if expected["num_files"] == actual["num_files"]:
                 print_check(
